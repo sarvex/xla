@@ -1760,6 +1760,7 @@ cc_library(
         "//xla:statusor",
         "//xla:types",
         "//xla:util",
+        "//xla/hlo/experimental/auto_sharding",
         "//xla/hlo/ir:hlo",
         "//xla/hlo/transforms:hlo_constant_splitter",
         "//xla/mlir/backends/gpu/transforms:passes",
@@ -1879,6 +1880,18 @@ xla_cc_test(
     tags = tf_cuda_tests_tags(),
     deps = [
         ":horizontal_loop_fusion",
+        "//xla/service:gpu_plugin",
+        "//xla/service:hlo_matchers",
+        "//xla/tests:hlo_test_base",
+        "//xla/tests:xla_internal_test_main",
+    ],
+)
+
+xla_cc_test(
+    name = "auto_sharding_gpu_compiler_test",
+    srcs = ["auto_sharding_gpu_compiler_test.cc"],
+    tags = tf_cuda_tests_tags(),
+    deps = [
         "//xla/service:gpu_plugin",
         "//xla/service:hlo_matchers",
         "//xla/tests:hlo_test_base",

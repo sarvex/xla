@@ -105,6 +105,8 @@ DebugOptions DefaultDebugOptionsIgnoringFlags() {
   opts.set_xla_gpu_enable_latency_hiding_scheduler(false);
 
   opts.set_xla_cpu_enable_mlir_tiling_and_fusion(false);
+  opts.set_xla_gpu_auto_spmd_partitioning_memory_budget_gb(0);
+  opts.set_xla_gpu_auto_spmd_partitioning_memory_budget_ratio(1.1);
   return opts;
 }
 
@@ -179,6 +181,13 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                                const std::string& value)) {
     return [debug_options, member_setter](const std::string& value) {
       (debug_options->*member_setter)(value);
+      return true;
+    };
+  };
+
+  auto float_setter_for = [](void (DebugOptions::*member_setter)(float)) {
+    return [member_setter](float value) {
+      (flag_values->*member_setter)(value);
       return true;
     };
   };
@@ -854,6 +863,22 @@ void MakeDebugOptionsFlags(std::vector<tsl::Flag>* flag_list,
                     &DebugOptions::set_xla_gpu_enable_latency_hiding_scheduler),
                 debug_options->xla_gpu_enable_latency_hiding_scheduler(),
                 "Enable latency-hiding scheduler for XLA:GPU"));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_auto_spmd_partitioning_memory_budget_gb",
+      int32_setter_for(
+          &DebugOptions::set_xla_gpu_auto_spmd_partitioning_memory_budget_gb),
+      debug_options->xla_gpu_auto_spmd_partitioning_memory_budget_gb(),
+      "Memory budget in GB per device for AutoSharding."));
+  flag_list->push_back(tsl::Flag(
+      "xla_gpu_auto_spmd_partitioning_memory_budget_ratio",
+      float_setter_for(
+          &DebugOptions::
+              set_xla_gpu_auto_spmd_partitioning_memory_budget_ratio),
+      debug_options->xla_gpu_auto_spmd_partitioning_memory_budget_ratio(),
+      "Enabled when xla_gpu_auto_spmd_partitioning_memory_budget_gb is 0. "
+      "The memory budget is set to "
+      "xla_gpu_auto_spmd_partitioning_memory_budget_ratio times the estimated "
+      "memory usage lower bound."));
 }  // NOLINT(readability/fn_size)
 
 // Allocates flag_values and flag_objects; this function must not be called more
