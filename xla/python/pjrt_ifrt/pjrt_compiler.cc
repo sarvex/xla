@@ -19,32 +19,48 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
-#include "xla/pjrt/mlir_to_hlo.h"
 #include "xla/python/pjrt_ifrt/pjrt_client.h"
 #include "xla/python/pjrt_ifrt/pjrt_executable.h"
+#include "xla/util.h"
 #include "tsl/platform/statusor.h"
+#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
 
 namespace xla {
 namespace ifrt {
 
 char PjRtCompiler::ID = 0;
 
+Client* PjRtCompiler::client() { return client_; }
+
 StatusOr<std::unique_ptr<LoadedExecutable>> PjRtCompiler::Compile(
-    mlir::ModuleOp mlir_module, CompileOptions options) {
+    mlir::ModuleOp mlir_module, CompileOptions options,
+    std::vector<tsl::RCReference<LoadedHostCallback>> loaded_host_callbacks) {
   DCHECK(this);
-  return PjRtLoadedExecutable::Create(client_, mlir_module, std::move(options));
+  return PjRtLoadedExecutable::Create(client_, mlir_module, std::move(options),
+                                      std::move(loaded_host_callbacks));
 }
 
 StatusOr<std::unique_ptr<LoadedExecutable>>
-PjRtCompiler::DeserializeLoadedExecutable(absl::string_view serialized,
-                                          CompileOptions options) {
+PjRtCompiler::DeserializeLoadedExecutable(
+    absl::string_view serialized, CompileOptions options,
+    std::vector<tsl::RCReference<LoadedHostCallback>> loaded_host_callbacks) {
   DCHECK(this);
   TF_ASSIGN_OR_RETURN(auto pjrt_loaded_executble,
                       client_->pjrt_client()->DeserializeExecutable(
                           serialized, std::move(options)));
-  return PjRtLoadedExecutable::Create(client_,
-                                      std::move(pjrt_loaded_executble));
+  return PjRtLoadedExecutable::Create(client_, std::move(pjrt_loaded_executble),
+                                      std::move(loaded_host_callbacks));
+}
+
+StatusOr<tsl::RCReference<LoadedHostCallback>>
+PjRtCompiler::MakeLoadedHostCallback(
+    absl::string_view type, std::unique_ptr<LoadedHostCallbackMakeArgs> args) {
+  if (make_loaded_host_callback_ == nullptr) {
+    return Unimplemented("Runtime does not support host callbacks.");
+  }
+  return make_loaded_host_callback_(this, type, std::move(args));
 }
 
 }  // namespace ifrt

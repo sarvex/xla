@@ -23,7 +23,6 @@ limitations under the License.
 #include <vector>
 
 #include "absl/algorithm/container.h"
-#include "xla/pjrt/host_callback.h"
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/python/ifrt/array.h"
 #include "xla/python/ifrt/device.h"
@@ -55,13 +54,11 @@ PyLoadedExecutable::PyLoadedExecutable(
     std::shared_ptr<PyClient> client,
     std::unique_ptr<ifrt::LoadedExecutable> ifrt_loaded_executable,
     std::shared_ptr<Traceback> traceback,
-    std::optional<std::string> fingerprint,
-    std::vector<pybind11::capsule> host_callbacks)
+    std::optional<std::string> fingerprint)
     : client_(std::move(client)),
       ifrt_loaded_executable_(std::move(ifrt_loaded_executable)),
       traceback_(std::move(traceback)),
-      fingerprint_(std::move(fingerprint)),
-      host_callbacks_(std::move(host_callbacks)) {
+      fingerprint_(std::move(fingerprint)) {
   CHECK(PyGILState_Check());
   next_ = client_->executables_;
   client_->executables_ = this;
@@ -106,33 +103,6 @@ PyLoadedExecutable::ExecuteInternal(
     PjRtDevice* device, bool returns_jax_array) {
   ifrt::LoadedExecutable::ExecuteResult result;
   {
-    auto options = options_;
-    std::shared_ptr<HostCallbackStates> host_callback_states;
-
-    if (!host_callbacks_.empty()) {
-      auto* host_memory_for_device_manager =
-          client()->pjrt_client()->GetPjRtHostMemoryForDeviceManager();
-      if (host_memory_for_device_manager == nullptr) {
-        return InternalError("Host callback not supported for runtime type: %s",
-                             client()->runtime_type());
-      }
-
-      host_callback_states = std::make_shared<HostCallbackStates>();
-      auto& contexts = host_callback_states->contexts.emplace_back();
-      auto& send_callbacks =
-          host_callback_states->send_callbacks.emplace_back();
-      auto& recv_callbacks =
-          host_callback_states->recv_callbacks.emplace_back();
-
-      for (const py::capsule& host_callback : host_callbacks_) {
-        contexts.push_back(CreateHostCallbackStateAndAppendSendRecvCallbacks(
-            *host_callback.get_pointer<HostCallback>(),
-            host_memory_for_device_manager, send_callbacks, recv_callbacks));
-      }
-      options.send_callbacks = host_callback_states->send_callbacks;
-      options.recv_callbacks = host_callback_states->recv_callbacks;
-    }
-
     py::gil_scoped_release gil_release;
     std::vector<tsl::RCReference<ifrt::Array>> arg_arrays(args.size());
     absl::c_transform(
@@ -156,19 +126,13 @@ PyLoadedExecutable::ExecuteInternal(
     if (device) {
       TF_ASSIGN_OR_RETURN(
           result, ifrt_loaded_executable()->Execute(
-                      absl::MakeSpan(arg_arrays), options,
+                      absl::MakeSpan(arg_arrays), options_,
                       /*devices=*/
                       ifrt::DeviceList(ifrt::DeviceList::Devices({device}))));
     } else {
       TF_ASSIGN_OR_RETURN(result, ifrt_loaded_executable()->Execute(
-                                      absl::MakeSpan(arg_arrays), options,
+                                      absl::MakeSpan(arg_arrays), options_,
                                       /*devices=*/std::nullopt));
-    }
-
-    if (!host_callbacks_.empty()) {
-      result.status.OnReady([host_callback_states](Status) mutable {
-        host_callback_states.reset();
-      });
     }
   }
   auto traceback = Traceback::Get();
@@ -298,44 +262,13 @@ template <typename ArgT,
 StatusOr<std::pair<std::vector<ResultT>, PyShardedToken>>
 ExecuteShardedOnLocalDevicesInternal(
     const ExecuteOptions& options, const std::shared_ptr<PyClient>& client,
-    ifrt::LoadedExecutable* ifrt_loaded_executable,
-    absl::Span<const py::capsule> host_callbacks, absl::Span<const ArgT> args,
+    ifrt::LoadedExecutable* ifrt_loaded_executable, absl::Span<const ArgT> args,
     std::optional<std::vector<PjRtFuture<Status>>>& returned_futures,
     bool returns_jax_array = false) {
   std::vector<tsl::RCReference<ifrt::Array>> output_arrays;
   std::unique_ptr<ifrt::Future<Status>> returned_future;
   int num_computations = ifrt_loaded_executable->addressable_devices().size();
   {
-    auto opts = options;
-    std::shared_ptr<HostCallbackStates> host_callback_states;
-    if (!host_callbacks.empty()) {
-      auto* host_memory_for_device_manager =
-          client->pjrt_client()->GetPjRtHostMemoryForDeviceManager();
-      if (host_memory_for_device_manager == nullptr) {
-        return InternalError("Host callback not supported for runtime type: %s",
-                             client->runtime_type());
-      }
-      returned_futures.emplace();
-
-      host_callback_states = std::make_shared<HostCallbackStates>();
-
-      for (int i = 0; i < num_computations; ++i) {
-        auto& contexts = host_callback_states->contexts.emplace_back();
-        auto& send_callbacks =
-            host_callback_states->send_callbacks.emplace_back();
-        auto& recv_callbacks =
-            host_callback_states->recv_callbacks.emplace_back();
-
-        for (const py::capsule& host_callback : host_callbacks) {
-          contexts.push_back(CreateHostCallbackStateAndAppendSendRecvCallbacks(
-              *host_callback.get_pointer<HostCallback>(),
-              host_memory_for_device_manager, send_callbacks, recv_callbacks));
-        }
-      }
-      opts.send_callbacks = host_callback_states->send_callbacks;
-      opts.recv_callbacks = host_callback_states->recv_callbacks;
-    }
-
     py::gil_scoped_release gil_release;
     for (const auto& arg : args) {
       if (ArgAdapter::num_devices(arg) != num_computations) {
@@ -353,19 +286,11 @@ ExecuteShardedOnLocalDevicesInternal(
       return ArgAdapter::GetIfRtArray(arg);
     });
     TF_ASSIGN_OR_RETURN(auto result, ifrt_loaded_executable->Execute(
-                                         absl::MakeSpan(arg_arrays), opts,
+                                         absl::MakeSpan(arg_arrays), options,
                                          /*devices=*/std::nullopt));
     output_arrays = std::move(result.outputs);
     if (returned_futures.has_value()) {
       returned_futures->resize(num_computations, std::move(result.status));
-    }
-
-    if (!host_callbacks.empty()) {
-      // For host callbacks to work, `returned_futures` must not be nullopt.
-      returned_futures.value().at(0).OnReady(
-          [host_callback_states](Status) mutable {
-            host_callback_states.reset();
-          });
     }
   }
 
@@ -394,11 +319,10 @@ PyLoadedExecutable::ExecuteShardedOnLocalDevices(
     absl::Span<const std::vector<std::variant<PyBuffer::object, PyArray>>> args,
     bool returns_jax_array) {
   std::optional<std::vector<PjRtFuture<Status>>> returned_futures;
-  TF_ASSIGN_OR_RETURN(
-      auto outputs_and_tokens,
-      ExecuteShardedOnLocalDevicesInternal(
-          options_, client_, ifrt_loaded_executable_.get(), host_callbacks_,
-          args, returned_futures, returns_jax_array));
+  TF_ASSIGN_OR_RETURN(auto outputs_and_tokens,
+                      ExecuteShardedOnLocalDevicesInternal(
+                          options_, client_, ifrt_loaded_executable_.get(),
+                          args, returned_futures, returns_jax_array));
   return std::move(outputs_and_tokens.first);
 }
 
@@ -409,8 +333,8 @@ PyLoadedExecutable::ExecuteShardedOnLocalDevicesWithTokens(
   std::optional<std::vector<PjRtFuture<Status>>> returned_futures;
   returned_futures.emplace();
   return ExecuteShardedOnLocalDevicesInternal(
-      options_, client_, ifrt_loaded_executable_.get(), host_callbacks_, args,
-      returned_futures, returns_jax_array);
+      options_, client_, ifrt_loaded_executable_.get(), args, returned_futures,
+      returns_jax_array);
 }
 
 StatusOr<std::vector<std::shared_ptr<HloModule>>>

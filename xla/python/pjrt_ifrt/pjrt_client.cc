@@ -34,9 +34,17 @@ char PjRtCompatibleClient::ID = 0;
 char PjRtClient::ID = 0;
 
 std::unique_ptr<PjRtClient> PjRtClient::Create(
-    std::shared_ptr<xla::PjRtClient> pjrt_client) {
-  return absl::WrapUnique(new PjRtClient(std::move(pjrt_client)));
+    std::shared_ptr<xla::PjRtClient> pjrt_client,
+    PjRtCompiler::MakeLoadedHostCallbackFn make_loaded_host_callback) {
+  return absl::WrapUnique(new PjRtClient(std::move(pjrt_client),
+                                         std::move(make_loaded_host_callback)));
 }
+
+PjRtClient::PjRtClient(
+    std::shared_ptr<xla::PjRtClient> pjrt_client,
+    PjRtCompiler::MakeLoadedHostCallbackFn make_loaded_host_callback)
+    : pjrt_client_(std::move(pjrt_client)),
+      default_compiler_(this, std::move(make_loaded_host_callback)) {}
 
 StatusOr<tsl::RCReference<PjRtCompatibleArray>> PjRtClient::CreatePjRtArray(
     std::shared_ptr<PjRtBuffer> pjrt_buffer) {

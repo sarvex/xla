@@ -74,7 +74,8 @@ StatusOr<std::unique_ptr<LoadedExecutable>> CompileOnDevices(
       build_options.set_device_assignment(device_assignment);
     }
   }
-  return compiler->Compile(*module, std::move(compile_options));
+  return compiler->Compile(*module, std::move(compile_options),
+                           /*loaded_host_callbacks=*/{});
 }
 
 TEST(LoadedExecutableImplTest, CompileAndExecute) {

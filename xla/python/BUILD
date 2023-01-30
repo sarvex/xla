@@ -267,6 +267,7 @@ cc_library(
         "py_array.cc",
         "py_buffer.cc",
         "py_client.cc",
+        "py_host_callback.cc",
         "py_executable.cc",
         "py_values.cc",
         "sharded_device_array.cc",
@@ -279,6 +280,7 @@ cc_library(
         "py_array.h",
         "py_buffer.h",
         "py_client.h",
+        "py_host_callback.h",
         "py_executable.h",
         "py_values.h",
         "sharded_device_array.h",
@@ -295,6 +297,7 @@ cc_library(
     features = ["-use_header_modules"],
     deps = [
         ":exceptions",
+        "//xla:shape_util",
         "@tsl//tsl/platform:float8",
         "@tsl//tsl/python/lib/core:numpy",
         ":pprof_profile_builder",
@@ -336,6 +339,7 @@ cc_library(
         "@tsl//tsl/platform:statusor",
         "@tsl//tsl/profiler/lib:traceme",
         "@tsl//tsl/platform:fingerprint",
+        "@tf_runtime//:ref_count",
     ] + if_cuda([
         "@local_config_cuda//cuda:cuda_headers",
     ]),

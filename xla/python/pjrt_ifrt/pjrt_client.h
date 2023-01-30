@@ -58,8 +58,14 @@ class PjRtCompatibleClient
 class PjRtClient final
     : public llvm::RTTIExtends<PjRtClient, PjRtCompatibleClient> {
  public:
+  // Creates a `Client` with a `PjRtClient`.
+  //
+  // `make_loaded_host_callback` is a function that implements
+  // `PjRtCompiler::MakeLoadedHostCallback()`. When unspecified, host callbacks
+  // will be unsupported.
   static std::unique_ptr<PjRtClient> Create(
-      std::shared_ptr<xla::PjRtClient> pjrt_client);
+      std::shared_ptr<xla::PjRtClient> pjrt_client,
+      PjRtCompiler::MakeLoadedHostCallbackFn make_loaded_host_callback = {});
 
   // PjRtCompatibleClient implementation.
 
@@ -137,15 +143,6 @@ class PjRtClient final
     return pjrt_client_->LookupDevice(device_id);
   }
 
-  StatusOr<ChannelHandle> CreateDeviceToHostChannelHandle() override {
-    DCHECK(this);
-    return pjrt_client_->CreateDeviceToHostChannelHandle();
-  }
-  StatusOr<ChannelHandle> CreateHostToDeviceChannelHandle() override {
-    DCHECK(this);
-    return pjrt_client_->CreateHostToDeviceChannelHandle();
-  }
-
   Compiler* GetDefaultCompiler() override {
     DCHECK(this);
     return &default_compiler_;
@@ -154,8 +151,8 @@ class PjRtClient final
   static char ID;  // NOLINT
 
  private:
-  explicit PjRtClient(std::shared_ptr<xla::PjRtClient> pjrt_client)
-      : pjrt_client_(std::move(pjrt_client)), default_compiler_(this) {}
+  PjRtClient(std::shared_ptr<xla::PjRtClient> pjrt_client,
+             PjRtCompiler::MakeLoadedHostCallbackFn make_loaded_host_callback);
 
   std::shared_ptr<xla::PjRtClient> pjrt_client_;
   PjRtCompiler default_compiler_;

@@ -20,11 +20,12 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 #include "llvm/Support/ExtensibleRTTI.h"
-#include "xla/client/xla_computation.h"
 #include "xla/python/ifrt/compiler.h"
 #include "xla/xla_data.pb.h"
+#include "tfrt/concurrency/ref_count.h"  // from @tf_runtime
 
 namespace xla {
 namespace ifrt {
@@ -33,19 +34,41 @@ class PjRtClient;
 
 class PjRtCompiler final : public llvm::RTTIExtends<PjRtCompiler, Compiler> {
  public:
-  explicit PjRtCompiler(PjRtClient* client) : client_(client) {}
+  using MakeLoadedHostCallbackFn =
+      absl::AnyInvocable<StatusOr<tsl::RCReference<LoadedHostCallback>>(
+          PjRtCompiler*, absl::string_view,
+          std::unique_ptr<LoadedHostCallbackMakeArgs>)>;
+
+  explicit PjRtCompiler(PjRtClient* client,
+                        MakeLoadedHostCallbackFn make_loaded_host_callback)
+      : client_(client),
+        make_loaded_host_callback_(std::move(make_loaded_host_callback)) {}
+
+  // Compiler implementation.
+
   ~PjRtCompiler() override = default;
 
+  Client* client() override;
+
   StatusOr<std::unique_ptr<LoadedExecutable>> Compile(
-      mlir::ModuleOp mlir_module, CompileOptions options) override;
+      mlir::ModuleOp mlir_module, CompileOptions options,
+      std::vector<tsl::RCReference<LoadedHostCallback>> loaded_host_callbacks)
+      override;
 
   StatusOr<std::unique_ptr<LoadedExecutable>> DeserializeLoadedExecutable(
-      absl::string_view serialized, CompileOptions options) override;
+      absl::string_view serialized, CompileOptions options,
+      std::vector<tsl::RCReference<LoadedHostCallback>> loaded_host_callbacks)
+      override;
+
+  StatusOr<tsl::RCReference<LoadedHostCallback>> MakeLoadedHostCallback(
+      absl::string_view type,
+      std::unique_ptr<LoadedHostCallbackMakeArgs> args) override;
 
   static char ID;  // NOLINT
 
  private:
   PjRtClient* client_;
+  MakeLoadedHostCallbackFn make_loaded_host_callback_;
 };
 
 }  // namespace ifrt
