@@ -169,6 +169,7 @@ cc_library(
     deps = [
         ":pjrt_executable",
         ":pjrt_future",
+        ":utils",
         "//xla:literal",
         "//xla:shape_util",
         "//xla:status",
@@ -226,6 +227,7 @@ cc_library(
         "//xla:util",
         "//xla/client:executable_build_options",
         "//xla/hlo/ir:hlo",
+        "//xla/service:hlo_cost_analysis",
         "//xla/service:hlo_proto_cc",
         "@com_google_absl//absl/strings",
         "@tsl//tsl/platform:statusor",

@@ -581,6 +581,57 @@ int64_t PjRtCApiExecutable::SizeOfGeneratedCodeInBytes() const {
   return args.size_in_bytes;
 }
 
+StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+PjRtCApiExecutable::GetCostAnalysis() const {
+  // Initialize function call args
+  PJRT_Executable_GetCostAnalysis_Args args;
+  args.struct_size = PJRT_Executable_GetCostAnalysis_Args_STRUCT_SIZE;
+  args.priv = nullptr;
+  args.executable = c_executable();
+
+  // Make PJRT C API call
+  const PJRT_Api* c_api = pjrt_c_api();
+  RETURN_STATUS_IF_ERROR(c_api->PJRT_Executable_GetCostAnalysis(&args), c_api);
+
+  // Copy returned properties to output map
+  absl::flat_hash_map<std::string, PjRtValueType> output_map;
+  for (auto i = 0; i < args.num_properties; ++i) {
+    switch (args.properties[i].type) {
+      case PJRT_NamedValue::PJRT_NamedValue_kFloat:
+        output_map[args.properties[i].name] = args.properties[i].float_value;
+        break;
+      case PJRT_NamedValue::PJRT_NamedValue_kInt64:
+        output_map[args.properties[i].name] = args.properties[i].int64_value;
+        break;
+      case PJRT_NamedValue::PJRT_NamedValue_kInt64List: {
+        PjRtValueType& output_value = output_map[args.properties[i].name];
+        std::vector<int64_t>& output_int64_list =
+            std::get<std::vector<int64_t>>(output_value);
+        output_int64_list.reserve(args.properties[i].value_size);
+        for (auto j = 0; j < args.properties[i].value_size; ++j) {
+          output_int64_list.push_back(args.properties[i].int64_array_value[j]);
+        }
+        break;
+      }
+      case PJRT_NamedValue::PJRT_NamedValue_kString:
+        output_map[args.properties[i].name] = args.properties[i].string_value;
+        break;
+      // C API client currently does not support forward compatibility (such as
+      // if the underlying PJRT library is a newer version that returns types
+      // not supported by this client). Failing here to prevent undefined
+      // behavior.
+      default:
+        LOG(FATAL) << "PJRT_Executable_GetCostAnalysis() returned attribute '"
+                   << args.properties[i].name << "' with unsupported type '"
+                   << args.properties[i].type
+                   << "' to PjRtCApiLoadedExecutable::GetCostAnalysis()";
+        break;
+    }
+  }
+
+  return output_map;
+}
+
 StatusOr<std::vector<std::shared_ptr<HloModule>>>
 PjRtCApiExecutable::GetHloModules() const {
   auto* c_api = pjrt_c_api();
@@ -905,59 +956,6 @@ bool PjRtCApiLoadedExecutable::IsDeleted() {
   pjrt::LogFatalIfPjrtError(c_api->PJRT_LoadedExecutable_IsDeleted(&args),
                             c_api);
   return args.is_deleted;
-}
-
-StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
-PjRtCApiLoadedExecutable::GetCostAnalysis() const {
-  // Initialize function call args
-  PJRT_LoadedExecutable_GetCostAnalysis_Args args;
-  args.struct_size = PJRT_LoadedExecutable_GetCostAnalysis_Args_STRUCT_SIZE;
-  args.priv = nullptr;
-  args.executable = c_loaded_executable();
-
-  // Make PJRT C API call
-  const PJRT_Api* c_api = pjrt_c_api();
-  RETURN_STATUS_IF_ERROR(c_api->PJRT_LoadedExecutable_GetCostAnalysis(&args),
-                         c_api);
-
-  // Copy returned properties to output map
-  absl::flat_hash_map<std::string, PjRtValueType> output_map;
-  for (auto i = 0; i < args.num_properties; ++i) {
-    switch (args.properties[i].type) {
-      case PJRT_NamedValue::PJRT_NamedValue_kFloat:
-        output_map[args.properties[i].name] = args.properties[i].float_value;
-        break;
-      case PJRT_NamedValue::PJRT_NamedValue_kInt64:
-        output_map[args.properties[i].name] = args.properties[i].int64_value;
-        break;
-      case PJRT_NamedValue::PJRT_NamedValue_kInt64List: {
-        PjRtValueType& output_value = output_map[args.properties[i].name];
-        std::vector<int64_t>& output_int64_list =
-            std::get<std::vector<int64_t>>(output_value);
-        output_int64_list.reserve(args.properties[i].value_size);
-        for (auto j = 0; j < args.properties[i].value_size; ++j) {
-          output_int64_list.push_back(args.properties[i].int64_array_value[j]);
-        }
-        break;
-      }
-      case PJRT_NamedValue::PJRT_NamedValue_kString:
-        output_map[args.properties[i].name] = args.properties[i].string_value;
-        break;
-      // C API client currently does not support forward compatibility (such as
-      // if the underlying PJRT library is a newer version that returns types
-      // not supported by this client). Failing here to prevent undefined
-      // behavior.
-      default:
-        LOG(FATAL)
-            << "PJRT_LoadedExecutable_GetCostAnalysis() returned attribute '"
-            << args.properties[i].name << "' with unsupported type '"
-            << args.properties[i].type
-            << "' to PjRtCApiLoadedExecutable::GetCostAnalysis()";
-        break;
-    }
-  }
-
-  return output_map;
 }
 
 // ---------------------------------- Buffers ----------------------------------

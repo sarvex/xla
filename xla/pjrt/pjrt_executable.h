@@ -20,16 +20,21 @@ limitations under the License.
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "absl/strings/string_view.h"
 #include "xla/client/executable_build_options.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/service/hlo.pb.h"
+#include "xla/service/hlo_cost_analysis.h"
 #include "xla/statusor.h"
 #include "xla/util.h"
 
 namespace xla {
+
+using PjRtValueType =
+    std::variant<std::string, int64_t, std::vector<int64_t>, float>;
 
 // Provides configuration for implementations that support compile and execute
 // spanning multiple slices. A slice is a set of devices connected by dedicated
@@ -132,6 +137,12 @@ class PjRtExecutable {
     return Unimplemented("Retrieving CompiledMemoryStats is not supported.");
   }
 
+  // Returns named values for cost properties of this executable (such as
+  // operations, size of input/outputs, and run time estimate). Properties may
+  // differ for different platforms.
+  virtual StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  GetCostAnalysis() const = 0;
+
   // Serialize this executable into a string and return the value.
   virtual StatusOr<std::string> SerializeExecutable() const {
     return Unimplemented("Serializing executable is not supported.");
@@ -145,6 +156,13 @@ class PjRtExecutable {
   virtual StatusOr<struct CompileOptions> GetCompileOptions() const {
     return Unimplemented("CompileOptions not available.");
   }
+};
+
+class PjRtExecutableUtil {
+ public:
+  static StatusOr<absl::flat_hash_map<std::string, PjRtValueType>>
+  RunHloCostAnalysis(const PjRtExecutable& executable,
+                     HloCostAnalysis* hlo_cost_analysis);
 };
 
 }  // namespace xla
