@@ -116,7 +116,9 @@ bool IsTransposeInputFusion(const HloInstruction& instr) {
 }
 
 bool IsInputFusibleTranspose(const HloInstruction& instr) {
-  return FindAnyTiledTranspose(instr) || IsTransposeInputFusion(instr);
+  return (instr.opcode() != HloOpcode::kBitcast &&
+          FindAnyTiledTranspose(instr)) ||
+         IsTransposeInputFusion(instr);
 }
 
 const HloInstruction* GetRealHeroForMultiOutputFusion(
@@ -265,9 +267,10 @@ bool IsUniversallyLoopFusible(const HloInstruction& instr) {
 }
 
 bool IsLoopFusibleAsConsumer(const HloInstruction& instr) {
-  return instr.IsFusible() && (IsUniversallyLoopFusible(instr) ||
-                               // Any reduction can be fused as a consumer.
-                               instr.opcode() == HloOpcode::kReduce);
+  return instr.IsFusible() && instr.opcode() != HloOpcode::kBitcast &&
+         (IsUniversallyLoopFusible(instr) ||
+          // Any reduction can be fused as a consumer.
+          instr.opcode() == HloOpcode::kReduce);
 }
 
 bool IsLoopFusibleAsProducer(const HloInstruction& instr) {

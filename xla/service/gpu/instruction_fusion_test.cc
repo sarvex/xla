@@ -286,12 +286,7 @@ TEST_F(InstructionFusionTest, AddIntoBitcast) {
     })")
                     .value();
 
-  EXPECT_TRUE(duplicating_instruction_fusion_.Run(module.get()).value());
-
-  HloInstruction* root = module->entry_computation()->root_instruction();
-  EXPECT_THAT(root, op::Fusion());
-  EXPECT_THAT(root->fused_expression_root(),
-              op::Bitcast(op::Add(op::Parameter(), op::Parameter())));
+  EXPECT_FALSE(duplicating_instruction_fusion_.Run(module.get()).value());
 }
 
 TEST_F(InstructionFusionTest, DontFuseGTE) {
