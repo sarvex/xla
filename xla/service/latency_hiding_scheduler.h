@@ -19,13 +19,16 @@ limitations under the License.
 #include <cstddef>
 #include <functional>
 #include <limits>
+#include <list>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
+#include "absl/types/span.h"
 #include "xla/service/hlo_alias_analysis.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_pass_interface.h"
@@ -232,8 +235,27 @@ class HloGraphNode {
   using TimeCost = LatencyEstimator::TimeCost;
 
   // Nullptr is not a valid value for 'i'.
-  explicit HloGraphNode(const HloInstruction* i, int64_t original_position)
-      : instr_(i), original_position_(original_position) {}
+  HloGraphNode(const HloInstruction* i, int64_t original_position,
+               const AsyncTracker* async_tracker)
+      : instr_(i), original_position_(original_position) {
+    resources_ = async_tracker->GetResourcesFromInstruction(*i);
+    absl::c_for_each(
+        resources_, [&async_tracker, this](const ResourcePair& resource) {
+          if (resource.second == ResourceUsageType::kResourceRelease &&
+              async_tracker->GetResourceHazardType(resource.first) ==
+                  ResourceHazardType::kShareable) {
+            released_shareable_resources_.push_back(resource.first);
+          }
+        });
+    absl::c_for_each(
+        resources_, [&async_tracker, this](const ResourcePair& resource) {
+          if (resource.second == ResourceUsageType::kResourceOccupy &&
+              async_tracker->GetResourceHazardType(resource.first) ==
+                  ResourceHazardType::kShareable) {
+            occupied_shareable_resources_.push_back(resource.first);
+          }
+        });
+  }
   const HloInstruction& GetInstr() const { return *instr_; }
   bool IsScheduled() const { return scheduled_; }
   int32_t GetIndegree() const { return indegree_; }
@@ -260,6 +282,10 @@ class HloGraphNode {
       return resource.second == ResourceUsageType::kResourceRelease;
     });
   }
+  bool DoesOccupyShareableResource(int64_t resource) const {
+    return absl::c_any_of(occupied_shareable_resources_,
+                          [resource](int64_t res) { return resource == res; });
+  }
   bool DoesReleaseResource(ResourceType res) const {
     return absl::c_any_of(resources_, [res](const ResourcePair& resource) {
       return resource.second == ResourceUsageType::kResourceRelease &&
@@ -282,6 +308,17 @@ class HloGraphNode {
       }
     }
     return std::nullopt;
+  }
+  std::vector<int64_t> GetShareableResourcesOnEdge(const HloEdge& edge) const {
+    HloGraphNode node = edge.Target();
+    std::vector<int64_t> resources;
+    absl::c_for_each(released_shareable_resources_,
+                     [&node, &resources](const int64_t resource) {
+                       if (node.DoesOccupyShareableResource(resource)) {
+                         resources.push_back(resource);
+                       }
+                     });
+    return resources;
   }
   absl::Span<HloEdge> GetPredecessors() {
     return absl::MakeSpan(predecessors_);
@@ -354,6 +391,10 @@ class HloGraphNode {
   bool force_delay_ = false;
   // Whether this node has been scheduled or not yet.
   bool scheduled_ = false;
+  // Shareable resources released by this node.
+  std::vector<int64_t> released_shareable_resources_;
+  // Shareable resources occupied by this node.
+  std::vector<int64_t> occupied_shareable_resources_;
 };
 
 // Schedule graph that can be used to drive scheduling
@@ -665,6 +706,11 @@ class DefaultSchedulerCore : public SchedulerCore {
     // Vector containing a list of nodes that aren't ready to schedule yet in
     // order of time when they are going to become ready.
     std::vector<const HloGraphNode*> next_ready_stack;
+    // List of the graph edges currently occupying the key shareable resource
+    // with projected finish times.
+    absl::flat_hash_map<int64_t,
+                        std::list<std::pair<HloEdge*, HloGraphNode::TimeCost>>>
+        shareable_resource_occupiers;
     // Reference to this scheduler run configuration.
     const SchedulerConfig& config;
     SchedulingState(const HloInstructionSequence* instr_sequence,
@@ -700,6 +746,12 @@ class DefaultSchedulerCore : public SchedulerCore {
   Status InitializeScheduler(const HloModule* module) override;
   StatusOr<std::vector<HloInstruction*>> ScheduleComputation(
       const HloComputation* computation) override;
+  static bool AddOccupierToResource(
+      HloGraphNode::TimeCost current_time, HloEdge& new_edge,
+      std::list<std::pair<HloEdge*, HloGraphNode::TimeCost>>& occupiers);
+  static bool DeleteOccupierFromResource(
+      HloGraphNode::TimeCost current_time, HloEdge& edge,
+      std::list<std::pair<HloEdge*, HloGraphNode::TimeCost>>& occupiers);
 
  protected:
   virtual void LogInstruction(const HloInstruction* instr) const;
