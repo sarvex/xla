@@ -220,6 +220,8 @@ PJRT_Error* PJRT_DeviceTopology_PlatformName(
     PJRT_DeviceTopology_PlatformName_Args* args);
 PJRT_Error* PJRT_DeviceTopology_PlatformVersion(
     PJRT_DeviceTopology_PlatformVersion_Args* args);
+PJRT_Error* PJRT_DeviceTopology_DeviceAttributes(
+    PJRT_DeviceTopology_DeviceAttributes_Args* args);
 
 PJRT_Error* PJRT_Compile(PJRT_Compile_Args* args);
 
@@ -366,6 +368,8 @@ constexpr PJRT_Api CreatePjrtApi(
           pjrt::PJRT_DeviceTopology_PlatformName,
       .PJRT_DeviceTopology_PlatformVersion =
           pjrt::PJRT_DeviceTopology_PlatformVersion,
+      .PJRT_DeviceTopology_DeviceAttributes =
+          pjrt::PJRT_DeviceTopology_DeviceAttributes,
 
       .PJRT_Compile = pjrt::PJRT_Compile,
   };

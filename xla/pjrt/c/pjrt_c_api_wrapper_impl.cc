@@ -116,6 +116,35 @@ static xla::Status PopulateExecutableCostAnalysisIfNeeded(
   return xla::OkStatus();
 }
 
+static void PopulatePjrtDeviceAttribute(PJRT_NamedValue& cur_attribute,
+                                        const std::string& name,
+                                        const xla::PjRtDeviceAttribute& value) {
+  cur_attribute.struct_size = PJRT_NamedValue_STRUCT_SIZE;
+  cur_attribute.priv = nullptr;
+  cur_attribute.name = name.c_str();
+  cur_attribute.name_size = name.size();
+  if (const std::string* string_val = std::get_if<std::string>(&value)) {
+    cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kString;
+    cur_attribute.string_value = string_val->c_str();
+    cur_attribute.value_size = string_val->size();
+  } else if (const std::vector<int64_t>* vector_val =
+                 std::get_if<std::vector<int64_t>>(&value)) {
+    cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kInt64List;
+    cur_attribute.int64_array_value = vector_val->data();
+    cur_attribute.value_size = vector_val->size();
+  } else if (const int64_t* int_value = std::get_if<int64_t>(&value)) {
+    cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kInt64;
+    cur_attribute.int64_value = *int_value;
+    cur_attribute.value_size = 1;
+  } else {
+    // Do not allow other types (such as
+    // PJRT_NamedValue::PJRT_NamedValue_kFloat) since device attributes
+    // currently should not return other types.
+    CHECK(false) << "Unexpected attribute type " << value.index() << " for "
+                 << name;
+  }
+}
+
 // ---------------------------------- Errors -----------------------------------
 
 void PJRT_Error_Destroy(PJRT_Error_Destroy_Args* args) {
@@ -1292,6 +1321,45 @@ PJRT_Error* PJRT_DeviceTopology_PlatformVersion(
   return nullptr;
 }
 
+PJRT_Error* PJRT_DeviceTopology_DeviceAttributes(
+    PJRT_DeviceTopology_DeviceAttributes_Args* args) {
+  PJRT_RETURN_IF_ERROR(CheckMatchingStructSizes(
+      "PJRT_DeviceTopology_DeviceAttributes_Args",
+      PJRT_DeviceTopology_DeviceAttributes_Args_STRUCT_SIZE,
+      args->struct_size));
+
+  auto attributes = args->topology->topology->DeviceAttributes();
+  if (!attributes.has_value() || attributes->empty()) {
+    args->num_devices = 0;
+    return nullptr;
+  }
+  args->num_devices = attributes->size();
+  args->num_attributes = (*attributes)[0].size();
+  for (const auto& per_device_attributes : *attributes) {
+    if (args->num_attributes != per_device_attributes.size()) {
+      return new PJRT_Error{tsl::errors::Internal(
+          "PJRT_DeviceTopology_DeviceAttributes: attribute count mismatch")};
+    }
+  }
+  args->attributes =
+      new PJRT_NamedValue[args->num_devices * args->num_attributes];
+  auto* attr = args->attributes;
+  for (const auto& per_device_attributes : *attributes) {
+    for (auto const& [name, value] : per_device_attributes) {
+      PopulatePjrtDeviceAttribute(*attr, name, value);
+      ++attr;
+    }
+  }
+  using ScratchType =
+      std::vector<absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>>;
+  args->scratch = new ScratchType{std::move(*attributes)};
+  args->free_result = +[](PJRT_DeviceTopology_DeviceAttributes_Args* args) {
+    delete[] args->attributes;
+    delete reinterpret_cast<ScratchType*>(args->scratch);
+  };
+  return nullptr;
+}
+
 PJRT_Error* PJRT_Compile(PJRT_Compile_Args* args) {
   PJRT_RETURN_IF_ERROR(CheckMatchingStructSizes(
       "PJRT_Compile_Args", PJRT_Compile_Args_STRUCT_SIZE, args->struct_size));
@@ -1336,31 +1404,7 @@ static void PopulatePjrtDeviceAttributes(PJRT_Device* c_device) {
   // Doing shallow copy of attribute names and values when it's string or an
   // array.
   for (auto const& [name, value] : attributes) {
-    PJRT_NamedValue& cur_attribute = c_device->attributes[ind];
-    cur_attribute.struct_size = PJRT_NamedValue_STRUCT_SIZE;
-    cur_attribute.priv = nullptr;
-    cur_attribute.name = name.c_str();
-    cur_attribute.name_size = name.size();
-    if (const std::string* string_val = std::get_if<std::string>(&value)) {
-      cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kString;
-      cur_attribute.string_value = string_val->c_str();
-      cur_attribute.value_size = string_val->size();
-    } else if (const std::vector<int64_t>* vector_val =
-                   std::get_if<std::vector<int64_t>>(&value)) {
-      cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kInt64List;
-      cur_attribute.int64_array_value = vector_val->data();
-      cur_attribute.value_size = vector_val->size();
-    } else if (const int64_t* int_value = std::get_if<int64_t>(&value)) {
-      cur_attribute.type = PJRT_NamedValue_Type::PJRT_NamedValue_kInt64;
-      cur_attribute.int64_value = *int_value;
-      cur_attribute.value_size = 1;
-    } else {
-      // Do not allow other types (such as
-      // PJRT_NamedValue::PJRT_NamedValue_kFloat) since device attributes
-      // currently should not return other types.
-      CHECK(false) << "Unexpected attribute type " << value.index() << " for "
-                   << name;
-    }
+    PopulatePjrtDeviceAttribute(c_device->attributes[ind], name, value);
     ++ind;
   }
 }

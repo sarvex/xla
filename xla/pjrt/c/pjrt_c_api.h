@@ -1257,6 +1257,24 @@ PJRT_DEFINE_STRUCT_TRAITS(PJRT_DeviceTopology_PlatformName_Args,
 typedef PJRT_Error* PJRT_DeviceTopology_PlatformName(
     PJRT_DeviceTopology_PlatformName_Args* args);
 
+struct PJRT_DeviceTopology_DeviceAttributes_Args {
+  size_t struct_size;
+  void* priv;
+  PJRT_DeviceTopology* topology;
+  void (*free_result)(PJRT_DeviceTopology_DeviceAttributes_Args* args);  // out
+  void* scratch;
+  size_t num_devices;           // out
+  size_t num_attributes;        // out
+  PJRT_NamedValue* attributes;  // out
+};
+PJRT_DEFINE_STRUCT_TRAITS(PJRT_DeviceTopology_DeviceAttributes_Args,
+                          attributes);
+
+// Returns an array of device specific attributes with attribute name, value
+// and value type.
+typedef PJRT_Error* PJRT_DeviceTopology_DeviceAttributes(
+    PJRT_DeviceTopology_DeviceAttributes_Args* args);
+
 struct PJRT_Compile_Args {
   size_t struct_size;
   void* priv;
@@ -1363,6 +1381,7 @@ typedef struct {
   _PJRT_API_STRUCT_FIELD(PJRT_DeviceTopology_Destroy);
   _PJRT_API_STRUCT_FIELD(PJRT_DeviceTopology_PlatformName);
   _PJRT_API_STRUCT_FIELD(PJRT_DeviceTopology_PlatformVersion);
+  _PJRT_API_STRUCT_FIELD(PJRT_DeviceTopology_DeviceAttributes);
 
   _PJRT_API_STRUCT_FIELD(PJRT_Compile);
 } PJRT_Api;

@@ -492,6 +492,10 @@ class PjRtCApiDeviceTopology : public PjRtDeviceTopology {
 
   const PJRT_DeviceTopology* c_topology() const { return c_topology_.get(); }
 
+  std::optional<
+      std::vector<absl::flat_hash_map<std::string, PjRtDeviceAttribute>>>
+  DeviceAttributes() const override;
+
  private:
   std::unique_ptr<PjRtCApiCompiler> compiler_;
   const PJRT_Api* c_api_;

@@ -445,41 +445,7 @@ void PjRtCApiDevice::InitAttributes() {
   const PJRT_Api* api = client_->pjrt_c_api();
   pjrt::LogFatalIfPjrtError(api->PJRT_Device_Attributes(&args), api);
 
-  for (int i = 0; i < args.num_attributes; ++i) {
-    const auto& attribute = args.attributes[i];
-    std::string attribute_name(attribute.name, attribute.name_size);
-    switch (attribute.type) {
-      case PJRT_NamedValue_Type::PJRT_NamedValue_kString: {
-        std::string string_value(attribute.string_value, attribute.value_size);
-        attributes_[attribute_name] = PjRtDeviceAttribute(string_value);
-        break;
-      }
-      case PJRT_NamedValue_Type::PJRT_NamedValue_kInt64: {
-        attributes_[attribute_name] =
-            PjRtDeviceAttribute(attribute.int64_value);
-        break;
-      }
-      case PJRT_NamedValue_Type::PJRT_NamedValue_kInt64List: {
-        const int64_t* array_ptr(attribute.int64_array_value);
-        std::vector<int64_t> int64_array(array_ptr,
-                                         array_ptr + attribute.value_size);
-        attributes_[attribute_name] = PjRtDeviceAttribute(int64_array);
-        break;
-      }
-      // Do not allow other types (such as
-      // PJRT_NamedValue::PJRT_NamedValue_kFloat) since device attributes
-      // currently should not return other types. Also C API client currently
-      // does not support forward compatibility (such as if the underlying
-      // PJRT library is a newer version that returns types not supported by
-      // this client). Failing here to prevent undefined behavior.
-      default: {
-        LOG(FATAL) << "PJRT_Device_Attributes() returned attribute '"
-                   << attribute_name << "' with unsupported type "
-                   << attribute.type << " to PjRtCApiDevice::InitAttributes()";
-        break;
-      }
-    }
-  }
+  attributes_ = pjrt::ConvertAttributes(args.attributes, args.num_attributes);
 }
 
 const absl::flat_hash_map<std::string, PjRtDeviceAttribute>&
@@ -1417,6 +1383,18 @@ absl::string_view PjRtCApiDeviceTopology::platform_version() const {
   pjrt::LogFatalIfPjrtError(c_api_->PJRT_DeviceTopology_PlatformVersion(&args),
                             c_api_);
   return absl::string_view(args.platform_version, args.platform_version_size);
+}
+
+std::optional<
+    std::vector<absl::flat_hash_map<std::string, PjRtDeviceAttribute>>>
+PjRtCApiDeviceTopology::DeviceAttributes() const {
+  auto attrs =
+      pjrt::GetDeviceTopologyDeviceAttributes(c_topology_.get(), c_api_);
+  if (attrs.ok() && !attrs->empty()) {
+    return *std::move(attrs);
+  }
+  TF_CHECK_OK(attrs.status());
+  return std::nullopt;
 }
 
 // Initializes `PJRT_Compile_Args`, which will be used to call

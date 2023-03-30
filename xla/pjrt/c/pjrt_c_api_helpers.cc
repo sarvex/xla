@@ -560,4 +560,73 @@ xla::PjRtChunk ConvertToCppChunk(const PJRT_Chunk& chunk) {
       });
 }
 
+absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute> ConvertAttributes(
+    PJRT_NamedValue* attributes, size_t num_attributes) {
+  absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute> result;
+  for (int i = 0; i < num_attributes; ++i) {
+    const auto& attribute = attributes[i];
+    std::string attribute_name(attribute.name, attribute.name_size);
+    switch (attribute.type) {
+      case PJRT_NamedValue_Type::PJRT_NamedValue_kString: {
+        std::string string_value(attribute.string_value, attribute.value_size);
+        result[attribute_name] = xla::PjRtDeviceAttribute(string_value);
+        break;
+      }
+      case PJRT_NamedValue_Type::PJRT_NamedValue_kInt64: {
+        result[attribute_name] =
+            xla::PjRtDeviceAttribute(attribute.int64_value);
+        break;
+      }
+      case PJRT_NamedValue_Type::PJRT_NamedValue_kInt64List: {
+        const int64_t* array_ptr(attribute.int64_array_value);
+        std::vector<int64_t> int64_array(array_ptr,
+                                         array_ptr + attribute.value_size);
+        result[attribute_name] = xla::PjRtDeviceAttribute(int64_array);
+        break;
+      }
+      // Do not allow other types (such as
+      // PJRT_NamedValue::PJRT_NamedValue_kFloat) since device attributes
+      // currently should not return other types. Also C API client currently
+      // does not support forward compatibility (such as if the underlying
+      // PJRT library is a newer version that returns types not supported by
+      // this client). Failing here to prevent undefined behavior.
+      default: {
+        LOG(FATAL) << "PJRT_Device_Attributes() returned attribute '"
+                   << attribute_name << "' with unsupported type "
+                   << attribute.type << " to PjRtCApiDevice::InitAttributes()";
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+xla::StatusOr<
+    std::vector<absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>>>
+GetDeviceTopologyDeviceAttributes(PJRT_DeviceTopology* topology,
+                                  const PJRT_Api* api) {
+  PJRT_DeviceTopology_DeviceAttributes_Args args;
+  args.struct_size = PJRT_DeviceTopology_DeviceAttributes_Args_STRUCT_SIZE;
+  args.priv = nullptr;
+  args.topology = topology;
+  args.free_result = nullptr;
+  args.scratch = nullptr;
+  args.num_devices = 0;
+  args.num_attributes = 0;
+  args.attributes = nullptr;
+  TF_RETURN_IF_ERROR(
+      PjrtErrorToStatus(api->PJRT_DeviceTopology_DeviceAttributes(&args), api));
+
+  std::vector<absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>>
+      result;
+  result.resize(args.num_devices);
+  auto* reader = args.attributes;
+  for (size_t i = 0; i < args.num_devices; ++i) {
+    result[i] = ConvertAttributes(reader, args.num_attributes);
+    reader += args.num_attributes;
+  }
+  args.free_result(&args);
+  return result;
+}
+
 }  // namespace pjrt

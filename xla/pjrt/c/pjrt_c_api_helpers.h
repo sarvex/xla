@@ -148,6 +148,14 @@ xla::Status CheckMatchingStructSizes(absl::string_view struct_name,
 
 absl::string_view GetPlatformVersion(PJRT_Client* client, const PJRT_Api* api);
 
+absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute> ConvertAttributes(
+    PJRT_NamedValue* attributes, size_t num_attributes);
+
+xla::StatusOr<
+    std::vector<absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>>>
+GetDeviceTopologyDeviceAttributes(PJRT_DeviceTopology* topology,
+                                  const PJRT_Api* api);
+
 // Releases `chunk`.
 PJRT_Chunk ConvertFromCppChunk(xla::PjRtChunk chunk);
 
