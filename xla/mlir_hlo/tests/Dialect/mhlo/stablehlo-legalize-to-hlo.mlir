@@ -705,6 +705,28 @@ func.func @op_custom_call_api_version_typed_ffi(%arg0: tensor<f32>) -> tensor<f3
 }
 // CHECK-LABEL: "op_custom_call_api_version_typed_ffi"
 
+func.func @top_k_gt_comparator(%arg0: tensor<bf16>, %arg1: tensor<bf16>, %arg2: tensor<i32>, %arg3: tensor<i32>) -> tensor<i1> {
+  %0 = "stablehlo.compare"(%arg0, %arg1) {
+    comparison_direction = #stablehlo<comparison_direction GT>,
+    compare_type = #stablehlo<comparison_type TOTALORDER>
+  } : (tensor<bf16>, tensor<bf16>) -> tensor<i1>
+  return %0 : tensor<i1>
+}
+
+// CHECK-LABEL: top_k_gt_comparator
+
+func.func @op_custom_call_approx_top_k(%arg0: tensor<16x256xbf16>) -> (tensor<16x4xbf16>, tensor<16x4xi32>) {
+  %0 = stablehlo.constant dense<0xFFF0000000000000> : tensor<f64>
+  %1 = stablehlo.constant dense<-1> : tensor<i32>
+  %2 = "stablehlo.iota"() {iota_dimension = 1 : i64} : () -> tensor<16x256xi32>
+  %3 = stablehlo.convert %0 : (tensor<f64>) -> tensor<bf16>
+  %4:2 = stablehlo.custom_call @ApproxTopK(%arg0, %2, %3, %1) {called_computations = [@top_k_gt_comparator], "mhlo.backend_config" = {aggregate_to_topk = true, recall_target = 9.492180e-01 : f32, reduction_dim = 1 : i64, reduction_input_size_override = -1 : i64, top_k = 4 : i64}} : (tensor<16x256xbf16>, tensor<16x256xi32>, tensor<bf16>, tensor<i32>) -> (tensor<16x4xbf16>, tensor<16x4xi32>)
+  return %4#0, %4#1 : tensor<16x4xbf16>, tensor<16x4xi32>
+}
+
+// CHECK: "mhlo.custom_call"(%arg0, %2, %3, %1) {api_version = 4 : i32, backend_config = {aggregate_to_topk = true, recall_target = 0.949217975 : f32, reduction_dim = 1 : i64, reduction_input_size_override = -1 : i64, top_k = 4 : i64}, call_target_name = "ApproxTopK", called_computations = [@top_k_gt_comparator]} : (tensor<16x256xbf16>, tensor<16x256xi32>, tensor<bf16>, tensor<i32>) -> (tensor<16x4xbf16>, tensor<16x4xi32>)
+// CHECK-LABEL: op_custom_call_approx_top_k
+
 func.func @op_divide(%arg0: tensor<f32>, %arg1: tensor<f32>) -> tensor<f32> {
   // CHECK: "mhlo.divide"(%arg0, %arg1) : (tensor<f32>, tensor<f32>) -> tensor<f32>
   %0 = "stablehlo.divide"(%arg0, %arg1) : (tensor<f32>, tensor<f32>) -> tensor<f32>

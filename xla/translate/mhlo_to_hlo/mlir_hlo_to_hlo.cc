@@ -16,6 +16,7 @@ limitations under the License.
 #include "xla/translate/mhlo_to_hlo/mlir_hlo_to_hlo.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -54,6 +55,7 @@ limitations under the License.
 #include "mlir/Support/LogicalResult.h"  // from @llvm-project
 #include "mlir/Transforms/RegionUtils.h"  // from @llvm-project
 #include "stablehlo/dialect/StablehloOps.h"  // from @stablehlo
+#include "xla/client/lib/approx_topk.h"
 #include "xla/client/lib/matrix.h"
 #include "xla/client/lib/quantize.h"
 #include "xla/client/lib/slicing.h"
@@ -1651,6 +1653,261 @@ LogicalResult ExportXlaOp(ConvertOp op, OpLoweringContext ctx) {
 }
 
 LogicalResult ExportXlaOp(CustomCallOp op, OpLoweringContext ctx) {
+  auto& value_map = *ctx.values;
+  llvm::SmallVector<xla::XlaOp> args;
+  if (failed(GetTuple(op, op.getInputs(), ctx, args))) return failure();
+
+  // Specially handle custom_calls from StableHLO that need stability guarantees
+  // that XLA can't provide.
+  //
+  // In particular, we need 6mo backward compat and 1mo forward compat. This
+  // will be provided by the StableHLO team by updating the following lowering.
+  // This lowering provides that compatibility guarantee, lowering to the
+  // appropriate HLO as the HLO implementing this custom_call may change.
+  //
+  // The only custom_call covered by the guarantee right now is ApproxTopK.
+  // This means that any custom_call with call_target_name = "ApproxTopK"
+  // written against the specification below will continue to behave as
+  // described within the compatibility window.
+  //
+  // The attributes supported by the ApproxTopK custom_call are:
+  //
+  //  - called_computation : This indicates the comparator for scoring entries
+  //  - api_version : always 4, the typed FFI API
+  //  - backend_config : The actual arguments to ApproxTopK. This includes
+  //    + top_k:i32 : the number of results to return
+  //    + reduction_dim:i64 : which dimension to search for the top k elements
+  //    + recall_target:float : may be any float type. the expected number of
+  //        top-k entries returned, divided by k.
+  //    + aggregate_to_topk:bool : When true, aggregates approximate results to
+  //        top-k. When false, returns the approximate results. The number of
+  //        the approximate results is implementation defined and is greater
+  //        equals to the specified `k`.
+  //    + reduction_input_size_override:bool : When set to a positive value, it
+  //        overrides the size determined by `input[reduction_dim]` for
+  //        evaluating the recall. This option is useful when the given
+  //        `input` is only a subset of the overall computation in SPMD or
+  //        distributed pipelines, where the true input size cannot be deferred
+  //        by the `input` shape.
+  //
+  // The arguments are a sequence of inputs over which to search, followed
+  // by a list of initial values for each tensor in the first
+  // list. Thus, we must have an even number of arguments consisting of a
+  // sequence of tensors followed by the same number of tensors with dtype i32.
+  //
+  // Given the above arguments and attributes, the custom_call returns tensors
+  // with the same shapes, save for reduction_dim, which may have changed in
+  // accordance with the values of aggregate_to_topk and
+  // reduction_input_size_override above. These tensors will contain slices of
+  // the input tensors perpendicular to that axis, which have approximately
+  // the top values of the comparator along that axis to within recall_target.
+  //
+  // The operands and attributes must obey the following constraints:
+  //
+  // (C1) All inputs have the same dimensions.
+  // (C2) element_type(inputs[k]) = element_type(init_values[k])
+  //                              = element_type(results[k]) for all k in [0, N)
+  // (C3) size(inputs) = size(init_values) = size(results)
+  // (C4) 0 <= reduction_dim < rank(inputs[0])
+  // (C5) 0 <= recall_target <= 1.0
+  // (C6) inputs[0].shape[reduction_dim] < reduction_input_size_override
+  //        || reduction_input_size_override <= 0
+  // (C7) called_computation has type
+  //      (tensor<E0>, tensor<E0>, ..., tensor<EN-1>, tensor<EN-1>) -> i1
+  //        where Ek = element_type(inputs[k])
+  // (C8) shape(results[k]) = shape(inputs[k]) except that the dimension sizes
+  //      of inputs[k] corresponding to reduction_dim_are replaced with ? or a
+  //      value greater than k, in accordance with the attributes above
+  //
+  // This feature is at time of writing only used by JAX, and is tested in the
+  // jax2tf backwards compatibility tests.
+
+  if (op.getCallTargetName() == "ApproxTopK") {
+    if (args.size() % 2 != 0) {
+      return op.emitOpError() << "ApproxTopK takes an even number of operands.";
+    }
+
+    auto isSupportedAttrName = [](NamedAttribute attr) {
+      auto name = attr.getName();
+      return name == "call_target_name" || name == "backend_config" ||
+             name == "api_version" || name == "called_computations";
+    };
+    for (const auto& attr : op->getAttrs()) {
+      if (!isSupportedAttrName(attr))
+        return op.emitOpError() << attr.getName().getValue()
+                                << " is not a supported attr for ApproxTopK";
+    }
+
+    auto num_inputs = args.size() / 2;
+    absl::Span<const xla::XlaOp> inputs(args.begin(), num_inputs);
+    absl::Span<const xla::XlaOp> init_values(args.begin() + num_inputs,
+                                             num_inputs);
+
+    auto builder = ctx.builder;
+    auto input_shape = builder->GetShape(inputs[0]);
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      auto op_shape = builder->GetShape(inputs[i]);
+      auto init_shape = builder->GetShape(init_values[i]);
+
+      if (!op_shape.ok() || !init_shape.ok()) {
+        return op.emitOpError() << "input and init_values must have shapes";
+      }
+
+      if (!xla::ShapeUtil::EqualIgnoringElementType(*input_shape, *op_shape)) {
+        return op.emitOpError() << "input shape mismatch at position " << i;
+      }
+
+      if (!xla::ShapeUtil::IsScalarWithElementType(*init_shape,
+                                                   op_shape->element_type())) {
+        return op.emitOpError()
+               << "input and init_value element type mismatch at position "
+               << i;
+      }
+    }
+
+    // Reduction function as a custom call called_computation
+    auto called_computations = op.getCalledComputations();
+    if (called_computations.size() != 1) {
+      return op.emitOpError()
+             << "ApproxTopK takes exactly 1 called_computation.";
+    }
+    mlir::func::FuncOp callee = ctx.converter->LookUpSymbol(
+        op.getCalledComputations()[0].cast<FlatSymbolRefAttr>());
+    mlir::FunctionType callee_type = callee.getFunctionType();
+    if (callee_type.getNumResults() != 1 ||
+        !callee_type.getResult(0)
+             .cast<TensorType>()
+             .getElementType()
+             .isSignlessInteger(1) ||
+        callee_type.getResult(0).cast<TensorType>().getRank()) {
+      return op.emitOpError() << "called_computation must return tensor<i1>";
+    }
+    if (callee_type.getNumInputs() != 2 * num_inputs) {
+      return op.emitOpError() << "called_computation must have the same "
+                                 "number of arguments as "
+                                 "the ApproxTopK operation.";
+    }
+    for (unsigned i = 0; i < num_inputs; ++i) {
+      mlir::Type expected_input_type =
+          op.getOperand(i).getType().cast<TensorType>().getElementType();
+      if (callee_type.getInput(2 * i).cast<TensorType>().getElementType() !=
+              expected_input_type ||
+          callee_type.getInput(2 * i + 1).cast<TensorType>().getElementType() !=
+              expected_input_type) {
+        return op.emitOpError() << "called_computation argument type does not "
+                                   "match the expected type at postition "
+                                << i;
+      }
+    }
+
+    if (failed(ctx.converter->RunOnFunction(callee))) return failure();
+    xla::XlaComputation& comparator =
+        ctx.converter->GetLoweredComputation(callee);
+
+    auto backend_config =
+        op->getAttrDictionary().getAs<mlir::DictionaryAttr>("backend_config");
+    if (!backend_config)
+      return op.emitOpError() << "Missing backend_config attribute";
+
+    for (auto attr : backend_config) {
+      auto name = attr.getName();
+      if (!(name == "top_k" || name == "reduction_dim" ||
+            name == "reduction_input_size_override" ||
+            name == "recall_target" || name == "recall_target" ||
+            name == "aggregate_to_topk"))
+        return op.emitOpError()
+               << name.getValue() << " is not a supported backend_config"
+               << " argument for ApproxTopK";
+    }
+
+    for (const auto& attr : op->getAttrs()) {
+      if (!isSupportedAttrName(attr))
+        return op.emitOpError() << attr.getName().getValue()
+                                << " is not a supported attr for ApproxTopK";
+    }
+
+    auto checkIntegerAttr =
+        [&](const std::string& attr_name) -> mlir::LogicalResult {
+      if (!backend_config.contains(attr_name))
+        return op.emitOpError()
+               << "Missing " << attr_name << " attribute in backend_config";
+      auto attr = backend_config.getAs<IntegerAttr>(attr_name);
+      if (!attr || !attr.getType().isInteger(64))
+        return op.emitOpError() << attr_name << " must be of i64 type";
+      return success();
+    };
+    auto checkFloatAttr =
+        [&](const std::string& attr_name) -> mlir::LogicalResult {
+      if (!backend_config.contains(attr_name))
+        return op.emitOpError()
+               << "Missing " << attr_name << " attribute in backend_config";
+      auto attr = backend_config.getAs<FloatAttr>(attr_name);
+      if (!attr || !attr.getType().isF32())
+        return op.emitOpError() << attr_name << " must be of f32 type";
+      return success();
+    };
+
+    if (failed(checkIntegerAttr("top_k"))) return failure();
+    if (failed(checkIntegerAttr("reduction_dim"))) return failure();
+    if (failed(checkIntegerAttr("reduction_input_size_override")))
+      return failure();
+    if (failed(checkFloatAttr("recall_target"))) return failure();
+    if (!backend_config.get("aggregate_to_topk"))
+      return op.emitOpError(
+          "Missing aggregate_to_topk attribute in backend_config");
+    if (!backend_config.getAs<BoolAttr>("aggregate_to_topk"))
+      return op.emitOpError("aggregate_to_topk must be of bool type.");
+
+    int64_t top_k = backend_config.getAs<IntegerAttr>("top_k").getInt();
+    int64_t reduction_dim =
+        backend_config.getAs<IntegerAttr>("reduction_dim").getInt();
+    if (reduction_dim < 0 ||
+        reduction_dim >
+            op.getOperand(0).getType().cast<RankedTensorType>().getRank())
+      return op.emitOpError() << "reduction_dim out of range";
+    float recall_target =
+        backend_config.getAs<FloatAttr>("recall_target").getValueAsDouble();
+    if (recall_target < 0 || recall_target > 1.0)
+      return op.emitOpError() << "recall_target out of range";
+    bool aggregate_to_topk =
+        backend_config.getAs<BoolAttr>("aggregate_to_topk").getValue();
+    int64_t reduction_input_size_override =
+        backend_config.getAs<IntegerAttr>("reduction_input_size_override")
+            .getInt();
+    if (reduction_input_size_override > 0 &&
+        reduction_input_size_override < op.getOperand(0)
+                                            .getType()
+                                            .cast<RankedTensorType>()
+                                            .getShape()[reduction_dim])
+      return op.emitOpError() << "reduction_input_size_override out of range";
+
+    if (num_inputs != op.getNumResults()) {
+      return op.emitOpError() << "num_results does not match num_inputs";
+    }
+    for (size_t i = 0; i < num_inputs; ++i) {
+      if (op.getOperand(i).getType().cast<TensorType>().getElementType() !=
+          op.getResult(i).getType().cast<TensorType>().getElementType()) {
+        return op.emitOpError() << "result elt type mismatch at position " << i;
+      }
+      for (size_t j = 0; j < inputs.size(); ++j) {
+        if (j == reduction_dim) continue;
+        if (op.getOperand(i).getType().cast<RankedTensorType>().getShape()[j] !=
+            op.getResult(i).getType().cast<RankedTensorType>().getShape()[j]) {
+          return op.emitOpError() << "result shape mismatch at position " << i
+                                  << ", index " << j;
+        }
+      }
+    }
+
+    auto cc_op = xla::ApproxTopK(
+        ctx.builder, inputs, init_values, top_k, reduction_dim, comparator,
+        recall_target, aggregate_to_topk, reduction_input_size_override);
+    for (const auto& item : llvm::enumerate(op.getResults())) {
+      value_map[item.value()] = xla::GetTupleElement(cc_op, item.index());
+    }
+    return success();
+  }
+
   if (op.getCalledComputations().size() > 1)
     return op.emitOpError()
            << "cannot export with more than one called computations";
@@ -1663,8 +1920,6 @@ LogicalResult ExportXlaOp(CustomCallOp op, OpLoweringContext ctx) {
                                "layouts are specified";
   }
 
-  llvm::SmallVector<xla::XlaOp> args;
-  if (failed(GetTuple(op, op.getInputs(), ctx, args))) return failure();
   auto xla_api_version = xla::ConvertCustomCallApiVersion(op.getApiVersion());
   if (!xla_api_version.ok()) return failure();
 
@@ -1699,7 +1954,6 @@ LogicalResult ExportXlaOp(CustomCallOp op, OpLoweringContext ctx) {
     literal_ptr = &*literal;
   }
 
-  auto& value_map = *ctx.values;
   auto aliasInfo =
       xla::ConvertOutputOperandAliasing(op.getOutputOperandAliases());
   auto output_operand_aliasing = absl::MakeSpan(*aliasInfo);
@@ -2112,7 +2366,8 @@ LogicalResult ExportXlaOp(ScatterOp op, OpLoweringContext ctx) {
     return success();
   }
 
-  // mhlo.ScatterOp supports multiple returns, untuple all the results of XLA's.
+  // mhlo.ScatterOp supports multiple returns, untuple all the results of
+  // XLA's.
   for (const auto& it : llvm::enumerate(op.getResults())) {
     value_map[it.value()] = xla::GetTupleElement(scatter_op, it.index());
   }

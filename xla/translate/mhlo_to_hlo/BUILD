@@ -72,6 +72,7 @@ cc_library(
         "//xla:status_macros",
         "//xla:xla_data_proto_cc",
         "//xla/client:xla_builder",
+        "//xla/client/lib:approx_topk",
         "//xla/client/lib:matrix",
         "//xla/client/lib:quantize",
         "//xla/client/lib:slicing",

@@ -243,6 +243,10 @@ class StablehloToHloOpConverter : public OpConversionPattern<StablehloOpTy> {
     // with the exception of ArrayAttr which is converted recursively.
     SmallVector<NamedAttribute> hloAttrs;
     for (NamedAttribute stablehloAttr : stablehloOp->getAttrs()) {
+      if constexpr (std::is_same<StablehloOpTy,
+                                 stablehlo::CustomCallOp>::value) {
+        if (stablehloAttr.getName() == "mhlo.backend_config") continue;
+      }
       auto hloAttr = convertAttr(stablehloAttr.getValue());
       if (!hloAttr) return failure();
       hloAttrs.push_back({stablehloAttr.getName(), hloAttr});
@@ -250,8 +254,8 @@ class StablehloToHloOpConverter : public OpConversionPattern<StablehloOpTy> {
 
     // Convert the MHLO operation to a StableHLO equivalent.
     // This can almost be done in a generic fashion, except for mhlo.case
-    // that uses a variadic number of regions which means an additional argument
-    // for the generic builder.
+    // that uses a variadic number of regions which means an additional
+    // argument for the generic builder.
     StablehloToHloOp<StablehloOpTy> hloOp;
     if constexpr (std::is_same<StablehloOpTy, stablehlo::CaseOp>::value) {
       hloOp = rewriter.replaceOpWithNewOp<mhlo::CaseOp>(
@@ -260,6 +264,17 @@ class StablehloToHloOpConverter : public OpConversionPattern<StablehloOpTy> {
     } else {
       hloOp = rewriter.replaceOpWithNewOp<StablehloToHloOp<StablehloOpTy>>(
           stablehloOp, hloTypes, hloOperands, hloAttrs);
+    }
+
+    if constexpr (std::is_same<StablehloOpTy, stablehlo::CustomCallOp>::value) {
+      auto hloBackendConfig = stablehloOp->getAttr("mhlo.backend_config");
+      if (hloBackendConfig) {
+        hloOp->setAttr("backend_config", hloBackendConfig);
+        hloOp->setAttr("api_version",
+                       mhlo::CustomCallApiVersionAttr::get(
+                           rewriter.getContext(),
+                           mhlo::CustomCallApiVersion::API_VERSION_TYPED_FFI));
+      }
     }
 
     // Finally, populate the regions while converting argument types
