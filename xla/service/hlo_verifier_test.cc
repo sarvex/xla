@@ -2688,5 +2688,71 @@ TEST_F(HloVerifierTest, InvalidU4Usage) {
       HasSubstr("S4/U4 is currently only supported in matmul and convolution"));
 }
 
+TEST_F(HloVerifierTest, TopKWrongComparator) {
+  const char* const hlo = R"(
+HloModule module
+
+compare {
+  p.0.lhs = f32[] parameter(0)
+  p.0.rhs = f32[] parameter(1)
+  p3 = f32[] parameter(2)
+  p4 = f32[] parameter(3)
+  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
+}
+
+ENTRY entry {
+  x = f32[10,10]{0,1} parameter(0)
+  ROOT topk = (f32[10,2]{0,1}, s32[10,2]{0,1}) topk(x), k=2, to_apply=compare
+}
+
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo));
+  auto status = verifier().Run(module.get()).status();
+  ASSERT_FALSE(status.ok());
+  EXPECT_THAT(status.error_message(), HasSubstr("to have 2 parameters"));
+}
+
+TEST_F(HloVerifierTest, TopKUnexpectedComparator) {
+  const char* const hlo = R"(
+HloModule module
+
+compare {
+  p.0.lhs = f32[] parameter(0)
+  p.0.rhs = f32[] parameter(1)
+  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LE
+}
+
+ENTRY entry {
+  x = f32[10,10]{0,1} parameter(0)
+  ROOT topk = (f32[10,2]{0,1}, s32[10,2]{0,1}) topk(x), k=2, to_apply=compare
+}
+
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo));
+  auto status = verifier().Run(module.get()).status();
+  ASSERT_FALSE(status.ok());
+  EXPECT_THAT(status.error_message(), HasSubstr("expects a strict comparison"));
+}
+
+TEST_F(HloVerifierTest, TopKOK) {
+  const char* const hlo = R"(
+HloModule topk, entry_computation_layout={(f32[10,10]{0,1})->(f32[10,2]{0,1}, s32[10,2]{0,1})}
+
+compare {
+  p.0.lhs = f32[] parameter(0)
+  p.0.rhs = f32[] parameter(1)
+  ROOT lt = pred[] compare(p.0.lhs, p.0.rhs), direction=LT
+}
+
+ENTRY TopK {
+  x = f32[10,10]{0,1} parameter(0)
+  ROOT topk = (f32[10,2]{0,1}, s32[10,2]{0,1}) topk(x), k=2, to_apply=compare
+}
+  )";
+  TF_ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo));
+  auto status = verifier().Run(module.get()).status();
+  ASSERT_TRUE(status.ok());
+}
+
 }  // namespace
 }  // namespace xla

@@ -4688,6 +4688,7 @@ cc_library(
     deps = [
         ":collective_ops_utils",
         ":hlo_pass",
+        ":pattern_matcher",
         ":shape_inference",
         "//xla:comparison_util",
         "//xla:permutation_util",
@@ -6432,6 +6433,8 @@ cc_library(
         ":hlo_pass",
         ":pattern_matcher",
         "//xla:shape_util",
+        "//xla/client:xla_builder",
+        "//xla/client/lib:comparators",
         "//xla/hlo/ir:hlo",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/strings",

@@ -41,6 +41,7 @@ limitations under the License.
 #include "xla/permutation_util.h"
 #include "xla/primitive_util.h"
 #include "xla/service/collective_ops_utils.h"
+#include "xla/service/pattern_matcher.h"
 #include "xla/service/shape_inference.h"
 #include "xla/shape_util.h"
 #include "xla/status_macros.h"
@@ -49,6 +50,8 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 
 namespace xla {
+
+namespace m = match;
 
 namespace {
 
@@ -69,6 +72,7 @@ bool IsCallerInstruction(HloInstruction* hlo) {
     case HloOpcode::kScatter:
     case HloOpcode::kSelectAndScatter:
     case HloOpcode::kSort:
+    case HloOpcode::kTopK:
     case HloOpcode::kFusion:
     case HloOpcode::kCustomCall:
       return true;
@@ -956,6 +960,40 @@ Status ShapeVerifier::HandleReverse(HloInstruction* reverse) {
   return CheckShape(
       reverse, ShapeInference::InferReverseShape(reverse->operand(0)->shape(),
                                                  reverse->dimensions()));
+}
+
+static bool IsStrictComparison(const HloComputation* cmp) {
+  const HloInstruction* root = cmp->root_instruction();
+  return Match(root, m::Compare(m::Parameter(0), m::Parameter(1))
+                         .WithComparisonDirection(ComparisonDirection::kGt)) ||
+         Match(root, m::Compare(m::Parameter(1), m::Parameter(0))
+                         .WithComparisonDirection(ComparisonDirection::kGt)) ||
+         Match(root, m::Compare(m::Parameter(0), m::Parameter(1))
+                         .WithComparisonDirection(ComparisonDirection::kLt)) ||
+         Match(root, m::Compare(m::Parameter(1), m::Parameter(0))
+                         .WithComparisonDirection(ComparisonDirection::kLt));
+}
+
+Status ShapeVerifier::HandleTopK(HloInstruction* hlo) {
+  HloComputation* compare = hlo->to_apply();
+  Shape compare_shape = compare->root_instruction()->shape();
+  if (!ShapeUtil::Compatible(compare_shape, ShapeUtil::MakeShape(PRED, {}))) {
+    return InternalError(
+        "The TopK compare computation shape does not lead to a scalar "
+        "predicate shape: %s",
+        StringifyShape(compare_shape));
+  }
+
+  TF_RETURN_IF_ERROR(CheckParameterCount(hlo, compare, 2));
+  if (!IsStrictComparison(compare)) {
+    // TODO(cheshire): Less strict restriction.
+    return InternalError(
+        "TopK HLO expects a strict comparison of the operands");
+  }
+
+  return CheckShape(
+      hlo, ShapeInference::InferTopKShape(hlo->operand(0)->shape(),
+                                          Cast<HloTopKInstruction>(hlo)->k()));
 }
 
 Status ShapeVerifier::HandleSort(HloInstruction* hlo) {
