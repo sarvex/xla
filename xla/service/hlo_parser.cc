@@ -3084,7 +3084,8 @@ bool HloParserImpl::ParseFrontendAttributes(
 //         ('devices=' ('[' dims ']')* device_list)?
 //         ('metadata=' metadata)* '}'
 //
-// dims ::= int_list device_list ::= int_list
+// dims ::= int_list
+// device_list ::= int_list? ('<=[' int_list ']{' int_list '}')?
 // metadata ::= single_metadata |
 //              ('{' [single_metadata (',' single_metadata)*] '}')
 // last_tile_dims ::= sharding_type_list
@@ -3104,6 +3105,8 @@ bool HloParserImpl::ParseSingleSharding(OpSharding* sharding,
   bool last_tile_dims = false;
   std::vector<int64_t> devices;
   std::vector<int64_t> tile_assignment_dimensions;
+  std::vector<int64_t> iota_dimensions;
+  std::vector<int> iota_minor_to_major;
   std::vector<OpSharding::Type> subgroup_types;
   while (lexer_.GetKind() != TokKind::kRbrace) {
     switch (lexer_.GetKind()) {
@@ -3142,16 +3145,58 @@ bool HloParserImpl::ParseSingleSharding(OpSharding* sharding,
           } while (EatIfPresent(TokKind::kComma));
 
           if (!ParseToken(TokKind::kRsquare,
-                          "expected ']' to start sharding devices shape")) {
+                          "expected ']' to end sharding devices shape")) {
             return false;
           }
-          do {
-            int64_t device;
-            if (!ParseInt64(&device)) {
+          if (lexer_.GetKind() == TokKind::kLeq) {
+            lexer_.Lex();
+            if (!ParseToken(
+                    TokKind::kLsquare,
+                    "expected '[' to start sharding devices iota shape")) {
               return false;
             }
-            devices.push_back(device);
-          } while (EatIfPresent(TokKind::kComma));
+            do {
+              int64_t dim;
+              if (!ParseInt64(&dim)) {
+                return false;
+              }
+              iota_dimensions.push_back(dim);
+            } while (EatIfPresent(TokKind::kComma));
+            if (!ParseToken(
+                    TokKind::kRsquare,
+                    "expected ']' to end sharding devices iota shape")) {
+              return false;
+            }
+            if (!ParseToken(TokKind::kLbrace,
+                            "expected '{' to start sharding devices iota "
+                            "minor_to_major")) {
+              return false;
+            }
+            do {
+              int64_t dim;
+              if (!ParseInt64(&dim)) {
+                return false;
+              }
+              if (dim != static_cast<int>(dim)) {
+                return TokenError(absl::StrFormat(
+                    "Out of range iota minor_to_major value %lld.", dim));
+              }
+              iota_minor_to_major.push_back(dim);
+            } while (EatIfPresent(TokKind::kComma));
+            if (!ParseToken(TokKind::kRbrace,
+                            "expected '}' to end sharding devices iota "
+                            "minor_to_major")) {
+              return false;
+            }
+          } else {
+            do {
+              int64_t device;
+              if (!ParseInt64(&device)) {
+                return false;
+              }
+              devices.push_back(device);
+            } while (EatIfPresent(TokKind::kComma));
+          }
         } else if (lexer_.GetStrVal() == "metadata") {
           lexer_.Lex();
           if (!ParseSingleOrListMetadata(sharding->mutable_metadata())) {
@@ -3201,10 +3246,6 @@ bool HloParserImpl::ParseSingleSharding(OpSharding* sharding,
     }
     sharding->set_type(OpSharding::MANUAL);
   } else {
-    if (devices.size() <= 1) {
-      return Error(
-          loc, "non-maximal shardings must have more than one device assigned");
-    }
     if (tile_assignment_dimensions.empty()) {
       return Error(
           loc,
@@ -3215,8 +3256,29 @@ bool HloParserImpl::ParseSingleSharding(OpSharding* sharding,
     for (int64_t dim : tile_assignment_dimensions) {
       sharding->add_tile_assignment_dimensions(dim);
     }
-    for (int64_t device : devices) {
-      sharding->add_tile_assignment_devices(device);
+    if (iota_minor_to_major.size() != iota_dimensions.size()) {
+      return Error(
+          loc, absl::StrFormat(
+                   "iota minor_to_major should have the same rank as iota tile "
+                   "assignment dimension: expected %lld, saw %lld.",
+                   iota_dimensions.size(), iota_minor_to_major.size()));
+    }
+    if (!iota_dimensions.empty()) {
+      CHECK(devices.empty());
+      absl::c_copy(iota_dimensions, tsl::protobuf::RepeatedFieldBackInserter(
+                                        sharding->mutable_iota_dimensions()));
+      absl::c_copy(iota_minor_to_major,
+                   tsl::protobuf::RepeatedFieldBackInserter(
+                       sharding->mutable_iota_minor_to_major()));
+    } else {
+      if (devices.size() <= 1) {
+        return Error(
+            loc,
+            "non-maximal shardings must have more than one device assigned");
+      }
+      for (int64_t device : devices) {
+        sharding->add_tile_assignment_devices(device);
+      }
     }
 
     if (last_tile_dims) {

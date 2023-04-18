@@ -752,6 +752,7 @@ message OpSharding {
   repeated int64 tile_assignment_dimensions = 3;
   // Flattened list of device IDs. The order of flattening is the same as used
   // by IndexUtil::MultiToLinearIndex(tile_assignment_shape).
+  // Only one of tile_assignment_devices and iota_dimensions shall be non-empty.
   repeated int64 tile_assignment_devices = 4;
   // If type == TUPLE, the sub-shardings, one per leaf node in the tuple shape,
   // in pre-order. The tuple shape could be nested; here we store just a
@@ -778,6 +779,16 @@ message OpSharding {
   // in [2,2,2,2] represents a subgrouping in replicate, manual,
   // unreduced sharding type respectively.
   repeated Type last_tile_dims = 8;
+
+  // Reshaped and transposed dimensions of the iota array that represents the 1D
+  // flattened list of device IDs. This is a more compact represetation of
+  // tile_assignment_devices.
+  // Only one of tile_assignment_devices and iota_dimensions shall be non-empty.
+  repeated int64 iota_dimensions = 9;
+  // Minor to major order of iota_dimensions, such that if transposed to be
+  // major to minor layout, the underlying 1D flattened list of device IDs forms
+  // an iota array of [0, num_devices).
+  repeated int32 iota_minor_to_major = 10;
 }
 // LINT.ThenChange()
 

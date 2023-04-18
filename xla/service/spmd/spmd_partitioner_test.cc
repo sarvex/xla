@@ -13250,11 +13250,11 @@ region_335.4575 {
 }
 
 ENTRY %main.21 {
-  p0 = bf16[8192,128]{1,0} parameter(0), sharding={devices=[2,4,2]0,8,2,10,4,12,6,14,1,9,3,11,5,13,7,15 last_tile_dim_replicate}
-  p1 = s32[32768,1]{1,0} parameter(1), sharding={devices=[8,1,2]0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 last_tile_dim_replicate}
-  p2 = bf16[32768,128]{1,0} parameter(2), sharding={devices=[8,2]0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}
-  scatter.0 = bf16[8192,128]{1,0} scatter(p0, p1, p2), update_window_dims={1}, inserted_window_dims={0}, scatter_dims_to_operand_dims={0}, index_vector_dim=1, to_apply=region_335.4575, sharding={devices=[2,4,2]0,8,2,10,4,12,6,14,1,9,3,11,5,13,7,15 last_tile_dim_replicate}
-  ROOT convert.427 = f32[8192,128]{1,0} convert(scatter.0), sharding={devices=[2,4,2]0,8,2,10,4,12,6,14,1,9,3,11,5,13,7,15 last_tile_dim_replicate}
+  p0 = bf16[8192,128]{1,0} parameter(0), sharding={devices=[2,4,2]<=[2,4,2]{0,1,2} last_tile_dim_replicate}
+  p1 = s32[32768,1]{1,0} parameter(1), sharding={devices=[8,1,2]<=[16]{0} last_tile_dim_replicate}
+  p2 = bf16[32768,128]{1,0} parameter(2), sharding={devices=[8,2]<=[16]{0}}
+  scatter.0 = bf16[8192,128]{1,0} scatter(p0, p1, p2), update_window_dims={1}, inserted_window_dims={0}, scatter_dims_to_operand_dims={0}, index_vector_dim=1, to_apply=region_335.4575, sharding={devices=[2,4,2]<=[2,4,2]{0,1,2} last_tile_dim_replicate}
+  ROOT convert.427 = f32[8192,128]{1,0} convert(scatter.0), sharding={devices=[2,4,2]<=[2,4,2]{0,1,2} last_tile_dim_replicate}
 }
 )";
 
@@ -13273,9 +13273,9 @@ TEST_F(SpmdPartitioningTest, ComplexReshardUnmergeToRight) {
 HloModule Test
 
 ENTRY main.4 {
-  Arg_0.1 = f32[8,32]{1,0} parameter(0), sharding={devices=[8,1]0,2,4,6,1,3,5,7}
-  tuple.2 = (f32[8,32]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]0,2,4,6,1,3,5,7}}
-  ROOT get-tuple-element.3 = f32[8,32]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]0,2,4,6,1,3,5,7}
+  Arg_0.1 = f32[8,32]{1,0} parameter(0), sharding={devices=[8,1]<=[2,4]{0,1}}
+  tuple.2 = (f32[8,32]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]<=[2,4]{0,1}}}
+  ROOT get-tuple-element.3 = f32[8,32]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]<=[2,4]{0,1}}
 }
 )";
 
@@ -13294,9 +13294,9 @@ TEST_F(SpmdPartitioningTest, ComplexReshardUnmergeToLeft) {
 HloModule Test
 
 ENTRY main.4 {
-  Arg_0.1 = f32[8,32]{1,0} parameter(0), sharding={devices=[1,8]0,2,4,6,1,3,5,7}
-  tuple.2 = (f32[8,32]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]0,2,4,6,1,3,5,7}}
-  ROOT get-tuple-element.3 = f32[8,32]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]0,2,4,6,1,3,5,7}
+  Arg_0.1 = f32[8,32]{1,0} parameter(0), sharding={devices=[1,8]<=[2,4]{0,1}}
+  tuple.2 = (f32[8,32]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]<=[2,4]{0,1}}}
+  ROOT get-tuple-element.3 = f32[8,32]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]<=[2,4]{0,1}}
 }
 )";
 
@@ -13315,9 +13315,9 @@ TEST_F(SpmdPartitioningTest, NoComplexReshardUnmergeToLeft) {
 HloModule Test
 
 ENTRY main.4 {
-  Arg_0.1 = f32[8,33]{1,0} parameter(0), sharding={devices=[1,8]0,2,4,6,1,3,5,7}
-  tuple.2 = (f32[8,33]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]0,2,4,6,1,3,5,7}}
-  ROOT get-tuple-element.3 = f32[8,33]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]0,2,4,6,1,3,5,7}
+  Arg_0.1 = f32[8,33]{1,0} parameter(0), sharding={devices=[1,8]<=[2,4]{0,1}}
+  tuple.2 = (f32[8,33]{1,0}) tuple(Arg_0.1), sharding={{devices=[2,4]<=[2,4]{0,1}}}
+  ROOT get-tuple-element.3 = f32[8,33]{1,0} get-tuple-element(tuple.2), index=0, sharding={devices=[2,4]<=[2,4]{0,1}}
 }
 )";
 

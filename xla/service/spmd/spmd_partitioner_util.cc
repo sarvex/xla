@@ -385,8 +385,8 @@ std::optional<HloSharding> PartialReplicateReshardCompatibleSharding(
     reshape_dimensions.push_back(num_target_replication);
   }
 
-  auto reshape_tile_assignment = partial_sharding.tile_assignment();
-  reshape_tile_assignment.Reshape(reshape_dimensions);
+  auto reshape_tile_assignment =
+      partial_sharding.tile_assignment().Reshape(reshape_dimensions);
 
   // Transpose.
   std::vector<int64_t> perm;
@@ -404,8 +404,7 @@ std::optional<HloSharding> PartialReplicateReshardCompatibleSharding(
       perm);
 
   // Reshape to target shape
-  auto transpose_tile_assignment = transpose_sharding.tile_assignment();
-  transpose_tile_assignment.Reshape(
+  auto transpose_tile_assignment = transpose_sharding.tile_assignment().Reshape(
       target_sharding.tile_assignment().dimensions());
 
   bool groups_matching = true;
@@ -1541,14 +1540,15 @@ std::optional<GroupedSharding> AlignGroupsWithInternal(
     }
   }
   if (matching_groups && !grouped_sharding.sharding.IsTileMaximal()) {
-    auto tiles = grouped_sharding.sharding.tile_assignment();
-    tiles.Each([&](absl::Span<const int64_t> indices, int64_t* device) {
+    auto tiles =
+        grouped_sharding.sharding.tile_assignment().shared_array_clone();
+    tiles->Each([&](absl::Span<const int64_t> indices, int64_t* device) {
       *device = original_src_to_ref_permutation[*device];
     });
     grouped_sharding.sharding =
         grouped_sharding.sharding.ReplicateOnLastTileDim()
-            ? HloSharding::PartialTile(tiles)
-            : HloSharding::Tile(tiles);
+            ? HloSharding::PartialTile(std::move(tiles))
+            : HloSharding::Tile(std::move(tiles));
   }
   grouped_sharding.device_groups = std::move(reference.device_groups);
   return grouped_sharding;
@@ -1640,15 +1640,17 @@ HloInstruction* PerGroupSliceFromReplicated(
   for (int64_t i = 0; i < group_dims.size(); ++i) {
     group_level_tile_dims[group_dims[i]] = group_dim_sizes[i];
   }
-  Array<int64_t> group_level_tile(group_level_tile_dims);
-  group_level_tile.Each([&](absl::Span<const int64_t> indices, int64_t* group) {
-    *group = 0;
-    for (int64_t dim : group_dims) {
-      *group *= group_level_tile.dim(dim);
-      *group += indices[dim];
-    }
-  });
-  auto group_level_sharding = HloSharding::Tile(group_level_tile);
+  auto group_level_tile =
+      std::make_shared<Array<int64_t>>(group_level_tile_dims);
+  group_level_tile->Each(
+      [&](absl::Span<const int64_t> indices, int64_t* group) {
+        *group = 0;
+        for (int64_t dim : group_dims) {
+          *group *= group_level_tile->dim(dim);
+          *group += indices[dim];
+        }
+      });
+  auto group_level_sharding = HloSharding::Tile(std::move(group_level_tile));
   auto padded_hlo = PadBaseShapeBeforeUnevenTiledSharding(
       replicated, group_level_sharding, b);
   auto shard_shape =
@@ -1732,8 +1734,8 @@ HloSharding CreateMatchingShardingOnDims(
     tile_dims.push_back(source_sharding.tile_assignment().num_elements() /
                         num_tiles);
   }
-  auto tgt_tile_assignment = source_sharding.tile_assignment();
-  tgt_tile_assignment.Reshape(tile_dims);
+  auto tgt_tile_assignment =
+      source_sharding.tile_assignment().Reshape(tile_dims);
   if (to_be_partially_replicated) {
     return AlignShardingOnDims(HloSharding::PartialTile(tgt_tile_assignment),
                                target_dims, source_sharding, source_dims);
@@ -1821,8 +1823,8 @@ GatherScatterOperandsShardedAcrossParallelDims(
       new_tile_assignment_dims.pop_back();
       to_partially_replicate = false;
     }
-    auto new_tile_assignment = to_adjust->tile_assignment();
-    new_tile_assignment.Reshape(new_tile_assignment_dims);
+    auto new_tile_assignment =
+        to_adjust->tile_assignment().Reshape(new_tile_assignment_dims);
     if (to_partially_replicate) {
       *to_adjust =
           AlignShardingOnDims(HloSharding::PartialTile(new_tile_assignment),
@@ -1841,8 +1843,8 @@ GatherScatterOperandsShardedAcrossParallelDims(
         new_index_shard.tile_assignment().dim(
             indices_parallel_dims_ordered_as_operand[i]);
   }
-  auto operand_shard_tiles = new_operand_shard.tile_assignment();
-  operand_shard_tiles.Reshape(operand_shard_tile_dims);
+  auto operand_shard_tiles =
+      new_operand_shard.tile_assignment().Reshape(operand_shard_tile_dims);
   new_operand_shard =
       AlignShardingOnDims(new_operand_shard.ReplicateOnLastTileDim()
                               ? HloSharding::PartialTile(operand_shard_tiles)
