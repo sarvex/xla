@@ -1,0 +1,104 @@
+# Copyright 2023 The TensorFlow Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ============================================================================
+
+# Drawn from https://github.com/openxla/iree/blob/d2f5a7c9b2c757da93241afe443a254b3b3d22a1/.github/workflows/build_all.yml
+
+name: Build XLA's run_hlo_module.
+
+on:
+  workflow_call:
+    inputs:
+      build-dir:
+        required: true
+        type: string
+    outputs:
+      build-dir:
+        description: |
+          Local path that stores compiled artifacts.
+        value: ${{ jobs.build-run-hlo-module.outputs.build-dir }}
+      build-dir-archive:
+        description: |
+          Local path to the zipped build directory.
+        value: ${{ jobs.build-run-hlo-module.outputs.build-dir-archive }}
+      build-dir-gcs-artifact:
+        description: |
+          GCS path to the uploaded build archive.
+        value: ${{ jobs.build-run-hlo-module.outputs.build-dir-gcs-artifact }}
+
+env:
+  # This duplicates the variable from benchmark.yml. The variable needs to be in env
+  # instead of the outputs of other jobs because it contains the run attempt and we
+  # want that to be the current attempt, not attempts from other runs. 
+  # It therefore can't be passed in via inputs because the env context isn't available there.
+  GCS_DIR: gs://openxla-github-actions-presubmit-artifacts/${{ github.run_id }}/${{ github.run_attempt }}
+
+jobs:
+  build-run-hlo-module:
+    runs-on:
+      - self-hosted # must come first
+      - environment=testing
+      - cpu
+      - os-family=Linux
+    env:
+      BUILD_DIR: ${{ inputs.build-dir }}
+    outputs:
+      # Pass through the build directories as output so it's available to
+      # dependent jobs.
+      build-dir: ${{ env.BUILD_DIR }}
+      build-dir-archive: ${{ steps.archive.outputs.build-dir-archive }}
+      build-dir-gcs-artifact: ${{ steps.upload.outputs.build-dir-gcs-artifact }}
+    steps:
+      - name: "Check out PR repository"
+        if: ${{ env.BUILD_DIR == 'pr-build-dir' }}
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
+      - name: "Check out base repository"
+        if: ${{ env.BUILD_DIR == 'base-build-dir' }}
+        uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3.3.0
+        # temporarily disabling the base checkout since `docker_run.sh` hasn't been added yet.
+        # with:
+        #  ref: "${{ github.event.pull_request.base.sha }}"
+      - name: "Build docker"  # TODO(b/277242108): build once and reference docker image by digest.
+        run: |
+          docker build --file build_tools/docker/dockerfiles/benchmarking.Dockerfile \
+            --tag base \
+            build_tools/docker/context
+      - name: "Build run_hlo_module"
+        run: |
+          build_tools/github_actions/docker_run.sh \
+            base:latest \
+            build_tools/github_actions/build_xla.sh \
+              "${BUILD_DIR}"
+      - name: "See files here"
+        run: |
+          ls -lht
+      - name: "See files in build-dir"
+        run: |
+          ls -lht ${BUILD_DIR}
+      - name: "Creating build dir archive"
+        id: archive
+        env:
+          BUILD_DIR_ARCHIVE: ${{ env.BUILD_DIR }}.tar.zst
+        run: |
+          tar -I 'zstd -T0' \
+            -cf ${BUILD_DIR_ARCHIVE} ${BUILD_DIR}
+          echo "build-dir-archive=${BUILD_DIR_ARCHIVE}" >> "${GITHUB_OUTPUT}"
+      - name: "Uploading build dir archive"
+        id: upload
+        env:
+          BUILD_DIR_ARCHIVE: ${{ steps.archive.outputs.build-dir-archive }}
+          BUILD_DIR_GCS_ARTIFACT: ${{ env.GCS_DIR }}/${{ steps.archive.outputs.build-dir-archive }}
+        run: |
+          gcloud storage cp "${BUILD_DIR_ARCHIVE}" "${BUILD_DIR_GCS_ARTIFACT}"
+          echo "build-dir-gcs-artifact=${BUILD_DIR_GCS_ARTIFACT}" >> "${GITHUB_OUTPUT}"

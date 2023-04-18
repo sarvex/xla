@@ -1,5 +1,3 @@
-#!/bin/bash
-
 # Copyright 2023 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,19 +13,15 @@
 # limitations under the License.
 # ============================================================================
 
-BUILD_DIR=$1
+# Runs docker configured for usage with GitHub Actions, translating GitHub
+# Actions environment variables into generic ones and then invoking the generic
+# docker_run script.
 
-echo "Building XLA's run_hlo_module at ${BUILD_DIR}..."
-echo "---------"
+# Drawn from https://github.com/openxla/iree/blob/0c0c34f7c8d5a920942f888db4521f64737d598c/build_tools/github_actions/docker_run.sh
 
-# Build run_hlo_module
-build_start_time="$(date +%s)"
-echo "run_hlo_module build start time: ${build_start_time}"
-bazel --output_base=${BUILD_DIR} build \
-    -c opt \
-    --keep_going \
-    xla/tools:run_hlo_module
-build_end_time="$(date +%s)"
-echo "run_hlo_module build end time: ${build_end_time}"
-build_time="$((build_end_time - build_start_time))"
-echo "Build time is ${build_time} seconds."
+set -euo pipefail
+
+export DOCKER_HOST_WORKDIR="${GITHUB_WORKSPACE}"
+export DOCKER_HOST_TMPDIR="${RUNNER_TEMP}"
+
+"${GITHUB_WORKSPACE}/build_tools/docker/docker_run.sh" "$@"
