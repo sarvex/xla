@@ -1584,6 +1584,7 @@ cc_library(
         ":memory_space_assignment_repacking",
         ":tuple_points_to_analysis",
         "//xla:comparison_util",
+        "//xla:status",
         "//xla:statusor",
         "//xla:util",
         "//xla/hlo/ir:hlo",
@@ -1592,7 +1593,9 @@ cc_library(
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/container:flat_hash_set",
+        "@com_google_absl//absl/functional:any_invocable",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
     ],
 )
 
@@ -1611,6 +1614,7 @@ xla_cc_test(
         "//xla/tests:hlo_test_base",
         "//xla/tests:xla_internal_test_main",
         "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/strings",
         "@tsl//tsl/lib/core:status_test_util",
         "@tsl//tsl/platform:test",
     ],
@@ -4594,10 +4598,17 @@ cc_library(
         ":memory_space_assignment_utils",
         ":tuple_util",
         "//xla:debug_options_flags",
+        "//xla:status",
+        "//xla:util",
+        "//xla/hlo/ir:hlo",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:btree",
         "@com_google_absl//absl/functional:function_ref",
+        "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/types:span",
+        "@tsl//tsl/platform:errors",
+        "@tsl//tsl/platform:statusor",
     ],
 )
 

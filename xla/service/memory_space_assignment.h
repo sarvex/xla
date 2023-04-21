@@ -16,19 +16,24 @@ limitations under the License.
 #ifndef XLA_SERVICE_MEMORY_SPACE_ASSIGNMENT_H_
 #define XLA_SERVICE_MEMORY_SPACE_ASSIGNMENT_H_
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 // TODO(b/210891274): Use btree_map after build issue in Windows is resolved.
 #if defined(__GNUC__) || defined(__clang__)
 #include "absl/container/btree_map.h"
 #endif
 #include "absl/functional/function_ref.h"
+#include "absl/types/span.h"
+#include "xla/hlo/ir/hlo_instruction.h"
 #include "xla/service/heap_simulator.h"
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/memory_space_assignment.pb.h"
@@ -39,6 +44,8 @@ namespace xla {
 namespace memory_space_assignment {
 // Forward Declaration of Options.
 class Options;
+
+inline std::string_view kConcatBitcastCustomCall = "ConcatBitcast";
 
 // This class contains pre-set assignments determined by memory space
 // assignment. It contains two data structures: (1) a chunks vector that maps a
@@ -568,6 +575,7 @@ class MemorySpaceAssignment {
     virtual ~Allocation() = default;
 
     virtual bool is_copy_allocation() const { return false; }
+    virtual bool is_sliced_copy_allocation() const { return false; }
 
     // Adds a use to this allocation.
     void AddUse(HloUse use);
@@ -721,7 +729,107 @@ class MemorySpaceAssignment {
     std::optional<int64_t> cross_program_prefetch_index_;
   };
 
-  // TODO(b/275905276): create a SlicedCopyAllocation
+  // This class represents an allocation resulting from asynchronous sliced
+  // copies.
+  //
+  // Let the sliced allocation be represented as follows, and imagine that t3
+  // is the time when the entire buffer [p0, p3) is available for use
+  //
+  //   space
+  //    ^
+  // p3 |       +-----------+
+  //    |       |           |
+  // p2 |   +---+           |
+  //    |   |               |
+  // p1 |   +-------+       |
+  //    |           |       |
+  // p0 |           +-------+
+  //    +---|---|---|---|---|----> time
+  //        t0  t1  t2  t3  t4
+  //
+  // The Allocation underlying the SlicedCopyAllocation will use the following
+  // dimensions:
+  // - chunk = [p0, p3)
+  // - start time = t2
+  // - earliest_available_time = t3
+  // - end_time = t4
+  class SlicedCopyAllocation : public Allocation {
+   public:
+    struct SliceParam {
+      std::string ToString() const;
+      bool operator==(const SliceParam& other) const;
+
+      int64_t start_inclusive;
+      int64_t end_exclusive;
+    };
+
+    // Input description of 1 slice.
+    struct SliceInput {
+      Chunk chunk;
+      int64_t start_time;
+      std::vector<SliceParam> slice_params;
+    };
+
+    // Details about a slice in the sliced allocation.
+    struct SliceDetails {
+      std::string ToString() const;
+      bool operator==(const SliceDetails& other) const;
+
+      // Create the instructions to copy the slice. This method updates
+      // copy_start and copy_done.
+      Status CreateCopyStartAndDone(const Shape& original_shape,
+                                    HloInstruction& producer,
+                                    HloComputation& parent);
+
+      Chunk chunk;
+      int64_t copy_start_after_time = -1;
+      int64_t copy_done_before_time = -1;
+      std::vector<SliceParam> slice_params;
+      HloInstruction* copy_start = nullptr;
+      HloInstruction* copy_done = nullptr;
+    };
+
+    // sorted_slice_input is sorted by start_time
+    SlicedCopyAllocation(const Allocation& prev_allocation,
+                         MemorySpace memory_space,
+                         const std::vector<SliceInput>& sorted_slice_input,
+                         int64_t end_time,
+                         int64_t copy_done_schedule_before_time);
+
+    bool is_sliced_copy_allocation() const override { return true; }
+    Status Process() override;
+    void MarkNeeded(absl::flat_hash_set<const Allocation*>& needed_allocations)
+        const override;
+    HloPosition defining_position() const override;
+
+    // Returns the time the buffer is first available to be used. For
+    // SlicedCopyAllocation, this is when all copies have ended.
+    int64_t earliest_available_time() const override;
+
+    const std::vector<SliceDetails>& sorted_slice_details_const() const;
+    std::vector<SliceDetails>& sorted_slice_details();
+    HloInstruction* concat() const { return concat_; }
+
+    // Create an instruction to concatenate the slices. Populates concat_.
+    Status CreateConcat(const Shape& shape,
+                        absl::Span<HloInstruction* const> slices,
+                        HloComputation& parent);
+
+    bool operator==(const SlicedCopyAllocation& other) const;
+    std::string ToString() const override;
+
+   private:
+    SlicedCopyAllocation() = delete;
+
+    const Allocation& prev_allocation_;
+    // REQUIRES:
+    // - sorted_segments_[i].copy_start_after_time <=
+    //   sorted_segments_[i+j].copy.start_after_time
+    // - sorted_segments_[i].copy_done_before_time <=
+    //   sorted_segments_[i+j].copy.start_before_time
+    std::vector<SliceDetails> sorted_slice_details_;
+    HloInstruction* concat_ = nullptr;
+  };
 
   // An allocation in the default memory space that mirrors another Allocation
   // object. This is useful to model an eviction that happens before a while op
