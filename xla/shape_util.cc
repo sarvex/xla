@@ -1998,7 +1998,12 @@ Status ShapeUtil::ByteStrides(const Shape& shape, absl::Span<int64_t> strides) {
     int64_t dim_size = shape_dimensions[minor_to_major[dim]];
     num_of_elements *= dim_size;
   }
-  return num_of_elements * ByteSizeOfPrimitiveType(shape.element_type());
+  if (shape.element_type() == PRED) {
+    return num_of_elements;
+  }
+  int64_t num_bits =
+      num_of_elements * primitive_util::BitWidth(shape.element_type());
+  return CeilOfRatio<int64_t>(num_bits, CHAR_BIT);
 }
 
 /*static*/ int64_t ShapeUtil::ArrayDataSize(const Shape& shape) {
