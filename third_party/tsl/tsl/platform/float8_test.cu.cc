@@ -46,13 +46,17 @@ struct Float8TestParamNames {
       return "float8_e4m3b11";
     } else if constexpr (std::is_same_v<TypeParam, float8_e5m2>) {
       return "float8_e5m2";
+    } else if constexpr (std::is_same_v<TypeParam, float8_e4m3fnuz>) {
+      return "float8_e4m3fnuz";
+    } else if constexpr (std::is_same_v<TypeParam, float8_e5m2fnuz>) {
+      return "float8_e5m2fnuz";
     }
     return absl::StrCat(idx);
   }
 };
 
-using Float8Types =
-    ::testing::Types<float8_e4m3fn, float8_e5m2, float8_e4m3b11>;
+using Float8Types = ::testing::Types<float8_e4m3fn, float8_e5m2, float8_e4m3b11,
+                                     float8_e4m3fnuz, float8_e5m2fnuz>;
 TYPED_TEST_SUITE(Float8Test, Float8Types, Float8TestParamNames);
 
 TEST(Float8E4m3Test, NumericLimits) {
@@ -605,6 +609,15 @@ TYPED_TEST(Float8Test, CallTheConstOperator) {
   }
 }
 
+TEST(Float855m2Test, SmallCastToDenormal) {
+  // Special edge-case where rounding to a normalized value would
+  // normally round down, but rounding to a subnormal rounds up.
+  float x = std::ldexp(1.3125, -15);
+  float8_e5m2 y = static_cast<float8_e5m2>(x);
+  float z = static_cast<float>(y);
+  EXPECT_EQ(z, std::ldexp(1.5, -15));
+}
+
 // Helper utility for prettier test names.
 struct Float8CastTestParamNames {
   template <typename TypeParam>
@@ -624,17 +637,19 @@ struct Float8CastTestParamNames {
 #define GEN_LONG_DOUBLE_PAIR(Type)
 #endif
 
-#define GEN_DEST_TYPES(Type)                                           \
-  GEN_LONG_DOUBLE_PAIR(Type)                                           \
-  std::pair<Type, double>, std::pair<Type, float>,                     \
-      std::pair<Type, Eigen::bfloat16>, std::pair<Type, Eigen::half>,  \
-      std::pair<Type, float8_e4m3fn>, std::pair<Type, float8_e4m3b11>, \
-      std::pair<Type, float8_e5m2>, std::pair<Type, bool>,             \
+#define GEN_DEST_TYPES(Type)                                              \
+  GEN_LONG_DOUBLE_PAIR(Type)                                              \
+  std::pair<Type, double>, std::pair<Type, float>,                        \
+      std::pair<Type, Eigen::bfloat16>, std::pair<Type, Eigen::half>,     \
+      std::pair<Type, float8_e4m3fn>, std::pair<Type, float8_e4m3b11>,    \
+      std::pair<Type, float8_e4m3fnuz>, std::pair<Type, float8_e5m2fnuz>, \
+      std::pair<Type, float8_e5m2>, std::pair<Type, bool>,                \
       std::pair<Type, int32_t>, std::pair<Type, int64_t>
 
-#define GEN_TYPE_PAIRS()                                         \
-  GEN_DEST_TYPES(float8_e4m3fn), GEN_DEST_TYPES(float8_e4m3b11), \
-      GEN_DEST_TYPES(float8_e5m2)
+#define GEN_TYPE_PAIRS()                                          \
+  GEN_DEST_TYPES(float8_e4m3fn), GEN_DEST_TYPES(float8_e4m3b11),  \
+      GEN_DEST_TYPES(float8_e5m2), GEN_DEST_TYPES(float8_e4m3fn), \
+      GEN_DEST_TYPES(float8_e5m2fnuz)
 
 using Float8CastTypePairs = ::testing::Types<GEN_TYPE_PAIRS()>;
 
@@ -659,19 +674,6 @@ TYPED_TEST(Float8CastTest, CastThroughFloat) {
     EXPECT_THAT(dest, EqOrIsNan(expected));
   }
 }
-
-// Work-around for lack of consistent .synchronize() method in Eigen.
-template <typename Device>
-void synchronize(Device& device) {
-  // Nothing.
-}
-
-#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
-template <>
-void synchronize<Eigen::GpuDevice>(Eigen::GpuDevice& device) {
-  device.synchronize();
-}
-#endif
 
 TYPED_TEST(Float8CastTest, DeviceCast) {
   using Float8 = typename TypeParam::first_type;
@@ -722,7 +724,7 @@ TYPED_TEST(Float8CastTest, DeviceCast) {
   dst_device.device(device) = src_device.template cast<DestType>();
   device.memcpyDeviceToHost(dst_cpu.data(), dst_device_buffer,
                             kNumElems * sizeof(DestType));
-  synchronize(device);
+  device.synchronize();
 
   for (int i = 0; i < kNumElems; ++i) {
     DestType expected = static_cast<DestType>(src_cpu(i));
@@ -737,7 +739,7 @@ TYPED_TEST(Float8CastTest, DeviceCast) {
   src_device.device(device) = dst_device.template cast<Float8>();
   device.memcpyDeviceToHost(src_cpu.data(), src_device_buffer,
                             kNumElems * sizeof(Float8));
-  synchronize(device);
+  device.synchronize();
 
   for (int i = 0; i < kNumElems; ++i) {
     Float8 expected = static_cast<Float8>(dst_cpu(i));
@@ -747,16 +749,7 @@ TYPED_TEST(Float8CastTest, DeviceCast) {
   // Clean up.
   device.deallocate(src_device_buffer);
   device.deallocate(dst_device_buffer);
-  synchronize(device);
-}
-
-TEST(Float8Test, SmallCastToDenormal) {
-  // Special edge-case where rounding to a normalized value would
-  // normally round down, but rounding to a subnormal rounds up.
-  float x = std::ldexp(1.3125, -15);
-  float8_e5m2 y = static_cast<float8_e5m2>(x);
-  float z = static_cast<float>(y);
-  EXPECT_EQ(z, std::ldexp(1.5, -15));
+  device.synchronize();
 }
 
 }  // namespace

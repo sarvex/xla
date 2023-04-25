@@ -1039,8 +1039,7 @@ cc_library(
     hdrs = ["float8.h"],
     compatible_with = get_compatible_with_portable(),
     deps = [
-        "@com_google_absl//absl/numeric:bits",
-        "@eigen_archive//:eigen3",
+        "//third_party/py/ml_dtypes:float8",
     ],
 )
 

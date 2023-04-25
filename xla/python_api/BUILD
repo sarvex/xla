@@ -15,9 +15,9 @@ py_library(
     srcs_version = "PY3",
     visibility = ["//visibility:public"],
     deps = [
+        "//third_party/py/ml_dtypes",
         "//third_party/py/numpy",
         "//xla:xla_data_proto_py",
-        "@tsl//tsl/python/lib/core:pywrap_bfloat16",
     ],
 )
 
