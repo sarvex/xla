@@ -18,7 +18,9 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -29,6 +31,7 @@ limitations under the License.
 #include "xla/pjrt/pjrt_client.h"
 #include "xla/pjrt/pjrt_future.h"
 #include "xla/pjrt/tracked_tfrt_cpu_device_buffer.h"
+#include "xla/pjrt/transpose.h"
 #include "xla/runtime/cpu_event.h"
 #include "xla/shape.h"
 #include "xla/status.h"
@@ -38,9 +41,34 @@ limitations under the License.
 
 namespace xla {
 
-void CopyCpuBufferToLiteral(const Shape& device_shape,
-                            TrackedTfrtCpuDeviceBuffer* device_buffer,
-                            MutableLiteralBase* literal);
+class AbstractTfrtCpuBuffer;
+
+StatusOr<std::unique_ptr<TrackedTfrtCpuDeviceBuffer>>
+AllocateTrackedDeviceBuffer(
+    const Shape& on_device_shape,
+    absl::InlinedVector<tfrt::AsyncValueRef<runtime::CpuEvent>, 4>
+        definition_events);
+
+void AllocateAvsAndEvents(
+    const Shape& shape,
+    absl::InlinedVector<tfrt::RCReference<tfrt::AsyncValue>, 4>* avs,
+    absl::InlinedVector<tfrt::AsyncValueRef<runtime::CpuEvent>, 4>*
+        definition_events);
+
+StatusOr<std::unique_ptr<TrackedTfrtCpuDeviceBuffer>>
+BufferFromHostBufferHelper(
+    const void* data, PrimitiveType type, absl::Span<int64_t const> dims,
+    std::optional<absl::Span<int64_t const>> byte_strides,
+    PjRtClient::HostBufferSemantics host_buffer_semantics,
+    std::function<void()> on_done_with_host_buffer, const Shape& shape,
+    absl::AnyInvocable<void(absl::AnyInvocable<void()>)> enqueue_work,
+    absl::Mutex* transpose_mu, TransposePlanCache* transpose_cache);
+
+void CopyLiteralToCpuBuffer(
+    const LiteralSlice& literal, const Shape& shape,
+    AbstractTfrtCpuBuffer* cpu_buffer,
+    absl::InlinedVector<tfrt::RCReference<tfrt::AsyncValue>, 4>* avs,
+    absl::AnyInvocable<void(absl::AnyInvocable<void()>)> enqueue_work);
 
 // A RAII helper class used to set an AsyncValueRef<CpuEvent> to a ready state
 // upon destruction. In many cases in PjRt implementation, there will be
@@ -77,6 +105,8 @@ class AbstractTfrtCpuBuffer : public PjRtBuffer {
   ~AbstractTfrtCpuBuffer() override;
 
   const Shape& on_device_shape() const override { return on_device_shape_; }
+
+  StatusOr<Shape> logical_on_device_shape() override;
 
   StatusOr<std::unique_ptr<ExternalReference>> AcquireExternalReference()
       override;
@@ -177,6 +207,19 @@ class AbstractTfrtCpuBuffer : public PjRtBuffer {
 
  protected:
   virtual absl::string_view buffer_name() const = 0;
+
+  PjRtFuture<Status> ToLiteralHelper(
+      MutableLiteralBase* literal,
+      absl::AnyInvocable<
+          void(absl::Span<const tsl::RCReference<tsl::AsyncValue>>,
+               absl::AnyInvocable<void()>)>
+          enqueue_work_when_ready);
+
+  StatusOr<std::unique_ptr<PjRtBuffer>> CopyToDeviceAcrossClients(
+      PjRtDevice* dst_device);
+
+  StatusOr<std::unique_ptr<TrackedTfrtCpuDeviceBuffer>> CopyToDeviceHelper(
+      absl::AnyInvocable<void(absl::AnyInvocable<void()>)> enqueue_work);
 
   bool IsEmptyTuple() const {
     return on_device_shape_.IsTuple() &&

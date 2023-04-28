@@ -315,8 +315,6 @@ class TfrtCpuBuffer final : public AbstractTfrtCpuBuffer {
   TfrtCpuDevice* device() const override { return device_; }
   TfrtCpuClient* client() const override { return client_; }
 
-  StatusOr<Shape> logical_on_device_shape() override;
-
   using PjRtBuffer::ToLiteralSync;
   PjRtFuture<Status> ToLiteral(MutableLiteralBase* literal) override;
 
