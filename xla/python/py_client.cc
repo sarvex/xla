@@ -349,7 +349,7 @@ StatusOr<std::shared_ptr<PyLoadedExecutable>> PyClient::Compile(
                         ParseMlirModuleString(mlir_module, context));
     TF_ASSIGN_OR_RETURN(ifrt_loaded_executable,
                         ifrt_client_->GetDefaultCompiler()->Compile(
-                            module.get(), std::move(options)));
+                            module.get(), {std::move(options)}));
     TF_ASSIGN_OR_RETURN(fingerprint, ifrt_loaded_executable->Fingerprint());
   }
   auto traceback = Traceback::Get();
@@ -373,7 +373,7 @@ StatusOr<std::shared_ptr<PyLoadedExecutable>> PyClient::DeserializeExecutable(
     TF_ASSIGN_OR_RETURN(
         ifrt_loaded_executable,
         ifrt_client_->GetDefaultCompiler()->DeserializeLoadedExecutable(
-            serialized, std::move(options)));
+            serialized, {std::move(options)}));
     TF_ASSIGN_OR_RETURN(fingerprint, ifrt_loaded_executable->Fingerprint());
   }
   TF_ASSIGN_OR_RETURN(fingerprint, ifrt_loaded_executable->Fingerprint());

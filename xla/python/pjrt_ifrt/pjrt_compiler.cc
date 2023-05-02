@@ -42,7 +42,7 @@ PjRtCompiler::DeserializeLoadedExecutable(absl::string_view serialized,
   DCHECK(this);
   TF_ASSIGN_OR_RETURN(auto pjrt_loaded_executble,
                       client_->pjrt_client()->DeserializeExecutable(
-                          serialized, std::move(options)));
+                          serialized, std::move(options).xla_options));
   return PjRtLoadedExecutable::Create(client_,
                                       std::move(pjrt_loaded_executble));
 }
