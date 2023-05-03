@@ -73,6 +73,10 @@ xla::Status LoadPjrtPlugin(absl::string_view device_type,
   return tsl::errors::Unimplemented(
       "LoadPjrtPlugin is not implemented on windows yet.");
 #else
+  xla::StatusOr<const PJRT_Api*> pjrt_api_or = PjrtApi(device_type);
+  if (!pjrt_api_or.ok()) {
+    return pjrt_api_or.status();
+  }
   void* library = dlopen(library_path.data(), RTLD_LAZY);
   if (library == nullptr) {
     return tsl::errors::Internal("Failed to open ", library_path, ": ",

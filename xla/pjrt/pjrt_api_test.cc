@@ -41,4 +41,19 @@ TEST(PjRtApiTest, SetAndGetGlobalPjRtApi) {
                        HasSubstr("PJRT_Api not found for device type tpu")));
 }
 
+TEST(PjRtApiTest, LoadPjrtPluginFailEarly) {
+  PJRT_Api api;
+
+  TF_ASSERT_OK(pjrt::SetPjrtApi("GPU", &api));
+  TF_ASSERT_OK_AND_ASSIGN(const PJRT_Api* output, pjrt::PjrtApi("GPU"));
+  TF_ASSERT_OK_AND_ASSIGN(const PJRT_Api* output_lowercase,
+                          pjrt::PjrtApi("gpu"));
+
+  EXPECT_EQ(output, &api);
+  EXPECT_EQ(output_lowercase, &api);
+  EXPECT_THAT(pjrt::LoadPjrtPlugin("CPU", "/test/library/path"),
+              StatusIs(tensorflow::error::NOT_FOUND,
+                       HasSubstr("PJRT_Api not found for device type cpu")));
+}
+
 }  // namespace
