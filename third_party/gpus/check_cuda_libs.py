@@ -55,20 +55,20 @@ def check_cuda_lib(path, check_soname=True):
     the filename.
   """
   if not os.path.isfile(path):
-    raise ConfigError("No library found under: " + path)
+    raise ConfigError(f"No library found under: {path}")
   objdump = which("objdump")
   if check_soname and objdump is not None and not _is_windows():
     # Decode is necessary as in py3 the return type changed from str to bytes
     output = subprocess.check_output([objdump, "-p", path]).decode("utf-8")
     output = [line for line in output.splitlines() if "SONAME" in line]
     sonames = [line.strip().split(" ")[-1] for line in output]
-    if not any(soname == os.path.basename(path) for soname in sonames):
-      raise ConfigError("None of the libraries match their SONAME: " + path)
+    if os.path.basename(path) not in sonames:
+      raise ConfigError(f"None of the libraries match their SONAME: {path}")
 
 
 def main():
   try:
-    args = [argv for argv in sys.argv[1:]]
+    args = list(sys.argv[1:])
     if len(args) % 2 == 1:
       raise ConfigError("Expected even number of arguments")
     checked_paths = []
@@ -78,7 +78,7 @@ def main():
       checked_paths.append(path)
     # pylint: disable=superfluous-parens
     print(os.linesep.join(checked_paths))
-    # pylint: enable=superfluous-parens
+      # pylint: enable=superfluous-parens
   except ConfigError as e:
     sys.stderr.write(str(e))
     sys.exit(1)

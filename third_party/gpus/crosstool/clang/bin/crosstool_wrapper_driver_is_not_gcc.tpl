@@ -72,10 +72,7 @@ def GetOptionValue(argv, option):
   parser.add_argument(option, nargs='*', action='append')
   option = option.lstrip('-').replace('-', '_')
   args, _ = parser.parse_known_args(argv)
-  if not args or not vars(args)[option]:
-    return []
-  else:
-    return sum(vars(args)[option], [])
+  return sum(vars(args)[option], []) if args and vars(args)[option] else []
 
 
 def GetHostCompilerOptions(argv):
@@ -111,7 +108,7 @@ def GetHostCompilerOptions(argv):
   if args.no_canonical_prefixes:
     opts += ' -no-canonical-prefixes'
   if args.sysroot:
-    opts += ' --sysroot ' + args.sysroot[0]
+    opts += f' --sysroot {args.sysroot[0]}'
 
   return opts
 
@@ -120,8 +117,7 @@ def _update_options(nvcc_options):
     return nvcc_options
 
   update_options = { "relaxed-constexpr" : "expt-relaxed-constexpr" }
-  return [ update_options[opt] if opt in update_options else opt
-                    for opt in nvcc_options ]
+  return [update_options.get(opt, opt) for opt in nvcc_options]
 
 def GetNvccOptions(argv):
   """Collect the -nvcc_options values from argv.
@@ -140,7 +136,7 @@ def GetNvccOptions(argv):
 
   if args.nvcc_options:
     options = _update_options(sum(args.nvcc_options, []))
-    return ' '.join(['--'+a for a in options])
+    return ' '.join([f'--{a}' for a in options])
   return ''
 
 def system(cmd):
@@ -154,10 +150,7 @@ def system(cmd):
     if the process was terminated by a signal.
   """
   retv = os.system(cmd)
-  if os.WIFEXITED(retv):
-    return os.WEXITSTATUS(retv)
-  else:
-    return -os.WTERMSIG(retv)
+  return os.WEXITSTATUS(retv) if os.WIFEXITED(retv) else -os.WTERMSIG(retv)
 
 def InvokeNvcc(argv, log=False):
   """Call nvcc with arguments assembled from argv.
@@ -174,16 +167,17 @@ def InvokeNvcc(argv, log=False):
   nvcc_compiler_options = GetNvccOptions(argv)
   opt_option = GetOptionValue(argv, '-O')
   m_options = GetOptionValue(argv, '-m')
-  m_options = ''.join([' -m' + m for m in m_options if m in ['32', '64']])
-  m_host_options = ''.join([' -m' + m for m in m_options if m not in ['32', '64']])
+  m_options = ''.join([f' -m{m}' for m in m_options if m in ['32', '64']])
+  m_host_options = ''.join(
+      [f' -m{m}' for m in m_options if m not in ['32', '64']])
   host_compiler_options = ' '.join([host_compiler_options, m_host_options])
   include_options = GetOptionValue(argv, '-I')
   out_file = GetOptionValue(argv, '-o')
   depfiles = GetOptionValue(argv, '-MF')
   defines = GetOptionValue(argv, '-D')
-  defines = ''.join([' -D' + define for define in defines])
+  defines = ''.join([f' -D{define}' for define in defines])
   undefines = GetOptionValue(argv, '-U')
-  undefines = ''.join([' -U' + define for define in undefines])
+  undefines = ''.join([f' -U{define}' for define in undefines])
   std_options = GetOptionValue(argv, '-std')
   # Supported -std flags as of CUDA 9.0. Only keep last to mimic gcc/clang.
   nvcc_allowed_std_options = ["c++03", "c++11", "c++14"]
@@ -191,11 +185,14 @@ def InvokeNvcc(argv, log=False):
   if int(NVCC_VERSION.split('.')[0]) >= 11:
       nvcc_std_map["c++1z"] = "c++17"
       nvcc_allowed_std_options += ["c++17", "c++1z"]
-  std_options = ''.join([' -std=' +
-      (nvcc_std_map[define] if define in nvcc_std_map else define)
-      for define in std_options if define in nvcc_allowed_std_options][-1:])
-  fatbin_options = ''.join([' --fatbin-options=' + option
-      for option in GetOptionValue(argv, '-Xcuda-fatbinary')])
+  std_options = ''.join([
+      f' -std={nvcc_std_map.get(define, define)}' for define in std_options
+      if define in nvcc_allowed_std_options
+  ][-1:])
+  fatbin_options = ''.join([
+      f' --fatbin-options={option}'
+      for option in GetOptionValue(argv, '-Xcuda-fatbinary')
+  ])
 
   # The list of source files get passed after the -c option. I don't know of
   # any other reliable way to just get the list of source files to be compiled.
@@ -223,7 +220,7 @@ def InvokeNvcc(argv, log=False):
   src_files = [f for f in src_files if
                re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
   srcs = ' '.join(src_files)
-  out = ' -o ' + out_file[0]
+  out = f' -o {out_file[0]}'
 
   nvccopts = '-D_FORCE_INLINES '
   capabilities_sm = set(GetOptionValue(argv, "--cuda-gpu-arch"))
@@ -257,25 +254,17 @@ def InvokeNvcc(argv, log=False):
   if depfiles:
     # Generate the dependency file
     depfile = depfiles[0]
-    cmd = (NVCC_PATH + ' ' + nvccopts +
-           ' --compiler-options "' + host_compiler_options + '"' +
-           ' --compiler-bindir=' + GCC_HOST_COMPILER_PATH +
-           ' -I .' +
-           ' -x cu ' + opt + includes + ' ' + srcs + ' -M -o ' + depfile)
+    cmd = f'{NVCC_PATH} {nvccopts} --compiler-options "{host_compiler_options}" --compiler-bindir={GCC_HOST_COMPILER_PATH} -I . -x cu {opt}{includes} {srcs} -M -o {depfile}'
     if log: Log(cmd)
     exit_status = system(cmd)
     if exit_status != 0:
       return exit_status
 
-  cmd = (NVCC_PATH + ' ' + nvccopts +
-         ' --compiler-options "' + host_compiler_options + ' -fPIC"' +
-         ' --compiler-bindir=' + GCC_HOST_COMPILER_PATH +
-         ' -I .' +
-         ' -x cu ' + opt + includes + ' -c ' + srcs + out)
+  cmd = f'{NVCC_PATH} {nvccopts} --compiler-options "{host_compiler_options} -fPIC" --compiler-bindir={GCC_HOST_COMPILER_PATH} -I . -x cu {opt}{includes} -c {srcs}{out}'
 
   # TODO(zhengxq): for some reason, 'gcc' needs this help to find 'as'.
   # Need to investigate and fix.
-  cmd = 'PATH=' + PREFIX_DIR + ':$PATH ' + cmd
+  cmd = f'PATH={PREFIX_DIR}:$PATH {cmd}'
   if log: Log(cmd)
   return system(cmd)
 

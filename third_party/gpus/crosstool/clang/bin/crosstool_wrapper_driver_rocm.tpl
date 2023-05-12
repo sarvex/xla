@@ -51,12 +51,9 @@ def GetOptionValue(argv, option):
   """
 
   parser = ArgumentParser()
-  parser.add_argument('-' + option, nargs='*', action='append')
+  parser.add_argument(f'-{option}', nargs='*', action='append')
   args, _ = parser.parse_known_args(argv)
-  if not args or not vars(args)[option]:
-    return []
-  else:
-    return sum(vars(args)[option], [])
+  return sum(vars(args)[option], []) if args and vars(args)[option] else []
 
 
 def GetHostCompilerOptions(argv):
@@ -89,7 +86,7 @@ def GetHostCompilerOptions(argv):
   #if args.fno_canonical_system_headers:
   #  opts += ' -fno-canonical-system-headers'
   if args.sysroot:
-    opts += ' --sysroot ' + args.sysroot[0]
+    opts += f' --sysroot {args.sysroot[0]}'
 
   return opts
 
@@ -104,10 +101,7 @@ def system(cmd):
     if the process was terminated by a signal.
   """
   retv = os.system(cmd)
-  if os.WIFEXITED(retv):
-    return os.WEXITSTATUS(retv)
-  else:
-    return -os.WTERMSIG(retv)
+  return os.WEXITSTATUS(retv) if os.WIFEXITED(retv) else -os.WTERMSIG(retv)
 
 
 def InvokeHipcc(argv, log=False):
@@ -124,18 +118,20 @@ def InvokeHipcc(argv, log=False):
   host_compiler_options = GetHostCompilerOptions(argv)
   opt_option = GetOptionValue(argv, 'O')
   m_options = GetOptionValue(argv, 'm')
-  m_options = ''.join([' -m' + m for m in m_options if m in ['32', '64']])
+  m_options = ''.join([f' -m{m}' for m in m_options if m in ['32', '64']])
   include_options = GetOptionValue(argv, 'I')
   out_file = GetOptionValue(argv, 'o')
   depfiles = GetOptionValue(argv, 'MF')
   defines = GetOptionValue(argv, 'D')
-  defines = ''.join([' -D' + define for define in defines])
+  defines = ''.join([f' -D{define}' for define in defines])
   undefines = GetOptionValue(argv, 'U')
-  undefines = ''.join([' -U' + define for define in undefines])
+  undefines = ''.join([f' -U{define}' for define in undefines])
   std_options = GetOptionValue(argv, 'std')
   hipcc_allowed_std_options = ["c++11", "c++14", "c++17"]
-  std_options = ''.join([' -std=' + define
-      for define in std_options if define in hipcc_allowed_std_options])
+  std_options = ''.join([
+      f' -std={define}' for define in std_options
+      if define in hipcc_allowed_std_options
+  ])
 
   # The list of source files get passed after the -c option. I don't know of
   # any other reliable way to just get the list of source files to be compiled.
@@ -158,15 +154,9 @@ def InvokeHipcc(argv, log=False):
   src_files = [f for f in src_files if
                re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
   srcs = ' '.join(src_files)
-  out = ' -o ' + out_file[0]
+  out = f' -o {out_file[0]}'
 
-  hipccopts = ' '
-  # In hip-clang environment, we need to make sure that hip header is included
-  # before some standard math header like <complex> is included in any source.
-  # Otherwise, we get build error.
-  # Also we need to retain warning about uninitialised shared variable as
-  # warning only, even when -Werror option is specified.
-  hipccopts += ' --include=hip/hip_runtime.h '
+  hipccopts = ' ' + ' --include=hip/hip_runtime.h '
   # Force C++17 dialect (note, everything in just one string!)
   hipccopts += ' --std=c++17 '
   # Use -fno-gpu-rdc by default for early GPU kernel finalization
@@ -183,9 +173,7 @@ def InvokeHipcc(argv, log=False):
   if depfiles:
     # Generate the dependency file
     depfile = depfiles[0]
-    cmd = (HIPCC_PATH + ' ' + hipccopts +
-           host_compiler_options +
-           ' -I .' + includes + ' ' + srcs + ' -M -o ' + depfile)
+    cmd = f'{HIPCC_PATH} {hipccopts}{host_compiler_options} -I .{includes} {srcs} -M -o {depfile}'
     cmd = HIPCC_ENV.replace(';', ' ') + ' ' + cmd
     if log: Log(cmd)
     if VERBOSE: print(cmd)
@@ -193,9 +181,7 @@ def InvokeHipcc(argv, log=False):
     if exit_status != 0:
       return exit_status
 
-  cmd = (HIPCC_PATH + ' ' + hipccopts +
-         host_compiler_options + ' -fPIC' +
-         ' -I .' + opt + includes + ' -c ' + srcs + out)
+  cmd = f'{HIPCC_PATH} {hipccopts}{host_compiler_options} -fPIC -I .{opt}{includes} -c {srcs}{out}'
 
   cmd = HIPCC_ENV.replace(';', ' ') + ' '\
         + cmd
@@ -214,8 +200,10 @@ def main():
   parser.add_argument('-pass-exit-codes', action='store_true')
   args, leftover = parser.parse_known_args(sys.argv[1:])
 
-  if VERBOSE: print('PWD=' + os.getcwd())
-  if VERBOSE: print('HIPCC_ENV=' + HIPCC_ENV)
+  if VERBOSE:
+    print(f'PWD={os.getcwd()}')
+  if VERBOSE:
+    print(f'HIPCC_ENV={HIPCC_ENV}')
 
   if args.x and args.x[0] == 'rocm':
     # compilation for GPU objects
@@ -233,15 +221,18 @@ def main():
     gpu_linker_flags = [flag for flag in sys.argv[1:]
                                if not flag.startswith(('--rocm_log'))]
 
-    gpu_linker_flags.append('-L' + ROCR_RUNTIME_PATH)
-    gpu_linker_flags.append('-Wl,-rpath=' + ROCR_RUNTIME_PATH)
-    gpu_linker_flags.append('-l' + ROCR_RUNTIME_LIBRARY)
-    gpu_linker_flags.append('-L' + HIP_RUNTIME_PATH)
-    gpu_linker_flags.append('-Wl,-rpath=' + HIP_RUNTIME_PATH)
-    gpu_linker_flags.append('-l' + HIP_RUNTIME_LIBRARY)
-    gpu_linker_flags.append("-lrt")
-    gpu_linker_flags.append("-lstdc++")
-
+    gpu_linker_flags.append(f'-L{ROCR_RUNTIME_PATH}')
+    gpu_linker_flags.extend((
+        f'-Wl,-rpath={ROCR_RUNTIME_PATH}',
+        f'-l{ROCR_RUNTIME_LIBRARY}',
+        f'-L{HIP_RUNTIME_PATH}',
+    ))
+    gpu_linker_flags.extend((
+        f'-Wl,-rpath={HIP_RUNTIME_PATH}',
+        f'-l{HIP_RUNTIME_LIBRARY}',
+        "-lrt",
+        "-lstdc++",
+    ))
     if VERBOSE: print(' '.join([CPU_COMPILER] + gpu_linker_flags))
     return subprocess.call([CPU_COMPILER] + gpu_linker_flags)
 

@@ -44,32 +44,26 @@ def _expand_variables(input_str, cmake_vars):
     The expanded string.
   """
   def replace(match):
-    if match.group(1) in cmake_vars:
-      return cmake_vars[match.group(1)]
-    return ""
+    return cmake_vars[match.group(1)] if match.group(1) in cmake_vars else ""
+
   return _CMAKE_ATVAR_REGEX.sub(replace,_CMAKE_VAR_REGEX.sub(replace, input_str))
 
 
 def _expand_cmakedefines(line, cmake_vars):
   """Expands #cmakedefine declarations, using a dictionary 'cmake_vars'."""
 
-  # Handles #cmakedefine lines
-  match = _CMAKE_DEFINE_REGEX.match(line)
-  if match:
+  if match := _CMAKE_DEFINE_REGEX.match(line):
     name = match.group(1)
     suffix = match.group(2) or ""
     if name in cmake_vars:
-      return "#define {}{}\n".format(name,
-                                     _expand_variables(suffix, cmake_vars))
+      return f"#define {name}{_expand_variables(suffix, cmake_vars)}\n"
     else:
-      return "/* #undef {} */\n".format(name)
+      return f"/* #undef {name} */\n"
 
-  # Handles #cmakedefine01 lines
-  match = _CMAKE_DEFINE01_REGEX.match(line)
-  if match:
+  if match := _CMAKE_DEFINE01_REGEX.match(line):
     name = match.group(1)
     value = cmake_vars.get(name, "0")
-    return "#define {} {}\n".format(name, value)
+    return f"#define {name} {value}\n"
 
   # Otherwise return the line unchanged.
   return _expand_variables(line, cmake_vars)

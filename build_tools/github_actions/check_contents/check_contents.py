@@ -94,7 +94,7 @@ def batch(
       # I'd rather have a list comprehension in place of a generator expression
       # than catch RuntimeError and have to inspect the payload to verify it's
       # the one I want to be catching.
-      yield tuple([next(iterator) for _ in range(n)])
+      yield tuple(next(iterator) for _ in range(n))
     except StopIteration:
       return
 
@@ -202,9 +202,7 @@ def check_diffs(
     suppression_regex = re.compile(suppression_regex)
 
   def should_not_suppress(line) -> bool:
-    if suppression_regex:
-      return not suppression_regex.search(line)
-    return True
+    return not suppression_regex.search(line) if suppression_regex else True
 
   regex_locations = []
   for diff in diffs:
@@ -239,13 +237,11 @@ def main(argv: Sequence[str]):
       path_regex_exclusions=args.path_regex_exclusion,
   )
 
-  regex_locations = check_diffs(
+  if regex_locations := check_diffs(
       file_diffs,
       prohibited_regex=args.prohibited_regex,
       suppression_regex=args.suppression_regex,
-  )
-
-  if regex_locations:
+  ):
     for loc in regex_locations:
       logging.error(
           "Found `%s` in %s:%s",

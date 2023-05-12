@@ -60,7 +60,7 @@ class FileCheckVarReplacer:
     return re.sub(self._instr_name_matcher, self._replacer, line)
 
   def _replacer(self, m: re.Match) -> str:
-    instr_name = m.group(0)
+    instr_name = m[0]
     if instr_name in self._replacement_cache:
       return self._replacement_cache[instr_name]
     replacement_instr = self._generate_unique_varname(instr_name)
@@ -84,9 +84,7 @@ def replace_instruction_names(t: str) -> str:
     Test with replacements applied.
   """
   f = FileCheckVarReplacer()
-  out = []
-  for line in t.split("\n"):
-    out.append(f.replace_instruction_names_for_line(line))
+  out = [f.replace_instruction_names_for_line(line) for line in t.split("\n")]
   return "\n".join(out)
 
 

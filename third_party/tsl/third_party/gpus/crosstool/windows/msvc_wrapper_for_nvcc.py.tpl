@@ -65,8 +65,7 @@ def _update_options(nvcc_options):
     return nvcc_options
 
   update_options = { "relaxed-constexpr" : "expt-relaxed-constexpr" }
-  return [ update_options[opt] if opt in update_options else opt
-                    for opt in nvcc_options ]
+  return [update_options.get(opt, opt) for opt in nvcc_options]
 
 def GetNvccOptions(argv):
   """Collect the -nvcc_options values from argv.
@@ -86,7 +85,7 @@ def GetNvccOptions(argv):
 
   if args.nvcc_options:
     options = _update_options(sum(args.nvcc_options, []))
-    return (['--' + a for a in options], leftover)
+    return [f'--{a}' for a in options], leftover
   return ([], leftover)
 
 
@@ -103,7 +102,7 @@ def InvokeNvcc(argv, log=False):
 
   src_files = [f for f in argv if
                re.search('\.cpp$|\.cc$|\.c$|\.cxx$|\.C$', f)]
-  if len(src_files) == 0:
+  if not src_files:
     raise Error('No source files found for cuda compilation.')
 
   out_file = [ f for f in argv if f.startswith('/Fo') ]
@@ -114,21 +113,18 @@ def InvokeNvcc(argv, log=False):
   nvcc_compiler_options, argv = GetNvccOptions(argv)
 
   opt_option, argv = GetOptionValue(argv, '/O')
-  opt = ['-g']
-  if (len(opt_option) > 0 and opt_option[0] != 'd'):
-    opt = ['-O2']
-
+  opt = ['-O2'] if (len(opt_option) > 0 and opt_option[0] != 'd') else ['-g']
   include_options, argv = GetOptionValue(argv, '/I')
-  includes = ["-I " + include for include in include_options]
+  includes = [f"-I {include}" for include in include_options]
 
   defines, argv = GetOptionValue(argv, '/D')
-  defines = ['-D' + define for define in defines]
+  defines = [f'-D{define}' for define in defines]
 
   undefines, argv = GetOptionValue(argv, '/U')
-  undefines = ['-U' + define for define in undefines]
+  undefines = [f'-U{define}' for define in undefines]
 
   fatbin_options, argv = GetOptionValue(argv, '-Xcuda-fatbinary')
-  fatbin_options = ['--fatbin-options=' + option for option in fatbin_options]
+  fatbin_options = [f'--fatbin-options={option}' for option in fatbin_options]
 
   # The rest of the unrecognized options should be passed to host compiler
   host_compiler_options = [option for option in argv if option not in (src_files + out_file)]
@@ -139,23 +135,21 @@ def InvokeNvcc(argv, log=False):
   compute_capabilities, argv = GetOptionValue(argv, "--cuda-gpu-arch")
   for capability in compute_capabilities:
     capability = capability[len('sm_'):]
-    nvccopts += [
-        r'-gencode=arch=compute_%s,"code=sm_%s"' % (capability, capability)
-    ]
+    nvccopts += [f'-gencode=arch=compute_{capability},"code=sm_{capability}"']
   compute_capabilities, argv = GetOptionValue(argv, '--cuda-include-ptx')
   for capability in compute_capabilities:
     capability = capability[len('sm_'):]
-    nvccopts += [
-        r'-gencode=arch=compute_%s,"code=compute_%s"' % (capability, capability)
-    ]
+    nvccopts += [f'-gencode=arch=compute_{capability},"code=compute_{capability}"']
   _, argv = GetOptionValue(argv, '--no-cuda-include-ptx')
 
   # nvcc doesn't respect the INCLUDE and LIB env vars from MSVC,
   # so we explicity specify the system include paths and library search paths.
   if 'INCLUDE' in os.environ:
-    nvccopts += [('--system-include="%s"' % p) for p in os.environ['INCLUDE'].split(";")]
+    nvccopts += [
+        f'--system-include="{p}"' for p in os.environ['INCLUDE'].split(";")
+    ]
   if 'LIB' in os.environ:
-    nvccopts += [('--library-path="%s"' % p) for p in os.environ['LIB'].split(";")]
+    nvccopts += [f'--library-path="{p}"' for p in os.environ['LIB'].split(";")]
 
   nvccopts += nvcc_compiler_options
   nvccopts += undefines
